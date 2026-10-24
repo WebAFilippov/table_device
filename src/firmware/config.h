@@ -26,7 +26,7 @@ constexpr uint32_t PWM_MAX  = (1u << PWM_BITS) - 1;   // 2047
 constexpr float MM_PER_TICK_DEFAULT = 152.0f / 1500.0f;   // ~0.1013
 constexpr float TICKS_PER_MM_DEFAULT = 1500.0f / 152.0f;  // ~9.87
 
-constexpr float MANUAL_SPEED_MM_S = 8.0f;    // ручной режим (удержание)
+constexpr float MANUAL_SPEED_MM_S = 10.0f;    // ручной режим (удержание)
 constexpr float PRESET_SPEED_MM_S = 15.0f;   // поездка к пресету
 constexpr float CAL_SPEED_MM_S    = 12.0f;   // калибровка: достаточно быстро, чтобы на упоре
                                              // регулятор выжал ~65% ШИМ и ток пробил порог
@@ -48,7 +48,7 @@ constexpr uint32_t CAL_PAUSE_MS   = 10000;  // пауза на нижнем уп
 // Ограничение ШИМ: БП 5 А не тянет стопорный ток (14.7 А на 100% ШИМ) и
 // уходит в защиту. Калибровка едет на 30% (стопор ~4.4 А < 5 А).
 constexpr float CAL_DUTY_CAP  = 0.60f;
-constexpr float NORM_DUTY_CAP = 0.95f;
+constexpr float NORM_DUTY_CAP = 0.90f;
 constexpr int   INSTANT_JAM_RAW = 390;      // ~2.5 А: мотор «давит», но не едет с места
 
 // ================= Регулятор (крутить здесь) =================
