@@ -94,9 +94,10 @@ void Motor::task() {
         }
         st = MotorState::IDLE;
       } else if (movedSinceCmd || jamPushed) {
-        // застряли в пути: стоп + отъезд
-        stopNow();
+        // застряли в пути: стоп + отъезд в ПРОТИВОПОЛОЖНУЮ сторону.
+        // ВАЖНО: знак берём ДО stopNow() — он обнуляет vSet!
         float s = (vSet >= 0.0f) ? -1.0f : 1.0f;
+        stopNow();
         target = pos + (int64_t)(REVERSE_MM * ticksPerMm() * s);
         profileSpeed = PRESET_SPEED_MM_S;
         st = MotorState::REVERSING;
@@ -148,9 +149,10 @@ void Motor::task() {
         st = MotorState::IDLE;
         postEvent(MotorEvent::END_LIMIT);
       } else {
-        // препятствие/зажали: стоп + отъезд в противоположную сторону
-        stopNow();
+        // препятствие/зажали: стоп + отъезд в противоположную сторону.
+        // ВАЖНО: знак берём ДО stopNow() — он обнуляет vSet!
         float s = (vSet >= 0.0f) ? -1.0f : 1.0f;
+        stopNow();
         target = pos + (int64_t)(REVERSE_MM * ticksPerMm() * s);
         profileSpeed = PRESET_SPEED_MM_S;
         st = MotorState::REVERSING;

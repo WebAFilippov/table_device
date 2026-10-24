@@ -40,15 +40,15 @@ constexpr float RAW_TO_AMPS = ADC_FS_V / 4095.0f * 8.5f;  // *kILIS(8500)/1000 �
 constexpr float OC_THRESH_A = 4.5f;                       // порог перегрузки
 constexpr int   OC_RAW      = (int)(OC_THRESH_A / RAW_TO_AMPS); // ~700
 constexpr uint32_t OC_HOLD_MS     = 250;    // держать ток выше порога, чтобы не ловить пики
-constexpr int   END_MARGIN_TICKS  = 200;    // ~20 мм от упора = «у края»
+constexpr int   END_MARGIN_TICKS  = 100;    // ~10 мм от упора = «у края»
 constexpr uint32_t STALL_DETECT_MS  = 500;    // мотор включён, позиция стоит столько = упор/застревание
 constexpr uint32_t CAL_TIMEOUT_MS = 120000; // калибровка: не нашли упор за это время
 constexpr uint32_t CAL_PAUSE_MS   = 10000;  // пауза на нижнем упоре: успеть замерить высоту линейкой
 
 // Ограничение ШИМ: БП 5 А не тянет стопорный ток (14.7 А на 100% ШИМ) и
 // уходит в защиту. Калибровка едет на 30% (стопор ~4.4 А < 5 А).
-constexpr float CAL_DUTY_CAP  = 0.45f;
-constexpr float NORM_DUTY_CAP = 0.90f;
+constexpr float CAL_DUTY_CAP  = 0.60f;
+constexpr float NORM_DUTY_CAP = 0.95f;
 constexpr int   INSTANT_JAM_RAW = 390;      // ~2.5 А: мотор «давит», но не едет с места
 
 // ================= Регулятор (крутить здесь) =================

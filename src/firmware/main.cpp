@@ -23,11 +23,13 @@
  *     после включения (червяк + винт самотормозящие)
  */
 #include <Arduino.h>
+#include <esp32-hal-psram.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "config.h"
 #include "motor.h"
 #include "storage.h"
+#include "ui.h"
 
 Motor motor;
 
@@ -176,6 +178,13 @@ void setup() {
   storageInit();
   motor.begin();
 
+  uiBegin();
+
+
+  // Диагностика PSRAM (важно для LVGL)
+  Serial0.printf("PSRAM: found=%d size=%d KB\n",
+                 psramFound() ? 1 : 0, (int)(ESP.getPsramSize() / 1024));
+
   xTaskCreatePinnedToCore(motorTask, "motor", 8192, nullptr, 12, nullptr, 0);
 
   Serial0.println("== Стол: прошивка v0.1 (CLI) ==");
@@ -185,7 +194,12 @@ void setup() {
 
 void loop() {
   MotorEvent e = motor.pollEvent();
-  if (e != MotorEvent::NONE) printEvent(e);
+  if (e != MotorEvent::NONE) {
+    printEvent(e);
+    uiEvent(e);
+  }
+
+  uiTask();
 
   static String buf;
   while (Serial0.available()) {
