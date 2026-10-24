@@ -1,9 +1,8 @@
 #include "motor.h"
 #include "config.h"
-#include <Preferences.h>
+#include "storage.h"
 
 namespace {
-Preferences prefs;
 ESP32Encoder enc;
 constexpr uint8_t EVQ_SIZE = 8;
 }
@@ -405,16 +404,14 @@ void Motor::setOcAmps(float a) {
 // ---------- NVS ----------
 
 void Motor::loadCalib() {
-  prefs.begin("table", false);
-  calib.valid   = prefs.getBool("cvalid", false);
-  calib.tMin    = prefs.getLong64("tMin", 0);
-  calib.tMax    = prefs.getLong64("tMax", 0);
-  calib.hMin    = prefs.getFloat("hMin", 0);
-  calib.hMax    = prefs.getFloat("hMax", 0);
-  mmPerTick     = prefs.getFloat("mpt", MM_PER_TICK_DEFAULT);
-  calib.savedPos = prefs.getLong64("pos", 0);
-  ocRaw          = prefs.getFloat("oc", (float)OC_RAW);
-  prefs.end();
+  calib.valid   = stGetB("cvalid", false);
+  calib.tMin    = stGetI64("tMin", 0);
+  calib.tMax    = stGetI64("tMax", 0);
+  calib.hMin    = stGetF("hMin", 0);
+  calib.hMax    = stGetF("hMax", 0);
+  mmPerTick     = stGetF("mpt", MM_PER_TICK_DEFAULT);
+  calib.savedPos = stGetI64("pos", 0);
+  ocRaw          = stGetF("oc", (float)OC_RAW);
 }
 
 void Motor::saveCalib() {
@@ -422,14 +419,12 @@ void Motor::saveCalib() {
   if (now - lastSave < 2000) return;   // не молотим флеш
   lastSave = now;
   calib.savedPos = pos;
-  prefs.begin("table", false);
-  prefs.putBool("cvalid", calib.valid);
-  prefs.putLong64("tMin", calib.tMin);
-  prefs.putLong64("tMax", calib.tMax);
-  prefs.putFloat("hMin", calib.hMin);
-  prefs.putFloat("hMax", calib.hMax);
-  prefs.putFloat("mpt", mmPerTick);
-  prefs.putLong64("pos", pos);
-  prefs.putFloat("oc", ocRaw);
-  prefs.end();
+  stPutB("cvalid", calib.valid);
+  stPutI64("tMin", calib.tMin);
+  stPutI64("tMax", calib.tMax);
+  stPutF("hMin", calib.hMin);
+  stPutF("hMax", calib.hMax);
+  stPutF("mpt", mmPerTick);
+  stPutI64("pos", pos);
+  stPutF("oc", ocRaw);
 }

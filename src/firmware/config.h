@@ -7,6 +7,10 @@ namespace Pin {
   constexpr int RPWM = 38, LPWM = 39;     // ШИМ драйвера
   constexpr int REN  = 40, LEN  = 41;     // разрешение драйвера
   constexpr int IS_R = 1, IS_L = 2;       // датчики тока (R_IS/L_IS через 1к на GND)
+  // Дисплей/тач (SPI-пины дисплея задаются флагами TFT_eSPI в platformio.ini)
+  constexpr int LCD_BL  = 7;              // подсветка
+  constexpr int CTP_SDA = 8, CTP_SCL = 9; // тач I2C
+  constexpr int CTP_RST = 6;              // сброс тача
 }
 
 // ================= ШИМ =================

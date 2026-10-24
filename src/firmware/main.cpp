@@ -23,11 +23,11 @@
  *     после включения (червяк + винт самотормозящие)
  */
 #include <Arduino.h>
-#include <Preferences.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "config.h"
 #include "motor.h"
+#include "storage.h"
 
 Motor motor;
 
@@ -87,8 +87,6 @@ static void printEvent(MotorEvent e) {
 
 // ---------- CLI ----------
 
-static Preferences prefs;
-
 static void handleLine(String s) {
   s.trim();
   if (s.length() == 0) return;
@@ -143,9 +141,7 @@ static void handleLine(String s) {
   } else if (cmd == "save") {
     int n = arg.toInt();
     if (n >= 1 && n <= 4 && motor.calibrated()) {
-      prefs.begin("table", false);
-      prefs.putFloat(("p" + String(n)).c_str(), motor.posMm());
-      prefs.end();
+      stPutF(("p" + String(n)).c_str(), motor.posMm());
       Serial0.printf("Пресет %d сохранён: %.1f мм\n", n, motor.posMm());
     } else {
       Serial0.println("save <1..4> (нужна калибровка)");
@@ -153,9 +149,7 @@ static void handleLine(String s) {
   } else if (cmd == "gop") {
     int n = arg.toInt();
     if (n >= 1 && n <= 4 && motor.calibrated()) {
-      prefs.begin("table", false);
-      float mm = prefs.getFloat(("p" + String(n)).c_str(), NAN);
-      prefs.end();
+      float mm = stGetF(("p" + String(n)).c_str(), NAN);
       if (!isnan(mm)) {
         Serial0.printf("Едем к пресету %d: %.1f мм\n", n, mm);
         motor.cmdGotoMm(mm);
@@ -166,9 +160,7 @@ static void handleLine(String s) {
       Serial0.println("goP <1..4> (нужна калибровка)");
     }
   } else if (cmd == "resetcal") {
-    prefs.begin("table", false);
-    prefs.clear();
-    prefs.end();
+    stClear();
     Serial0.println("NVS очищено. Перезагрузи плату и сделай cal заново.");
   } else {
     Serial0.println("Неизвестная команда. help");
@@ -181,6 +173,7 @@ void setup() {
   Serial0.begin(115200);
   delay(300);
 
+  storageInit();
   motor.begin();
 
   xTaskCreatePinnedToCore(motorTask, "motor", 8192, nullptr, 12, nullptr, 0);
