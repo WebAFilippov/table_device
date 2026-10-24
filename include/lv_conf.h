@@ -8,17 +8,14 @@
 #define LV_COLOR_DEPTH 16
 #define LV_COLOR_16_SWAP 0   // если красный/синий поменялись местами — поставь 1
 
-// Вся память LVGL — из PSRAM (8 МБ, хватит на всё)
-#define LV_MEM_CUSTOM 1
-#if LV_MEM_CUSTOM
-  #define LV_MEM_CUSTOM_INCLUDE <esp32-hal-psram.h>
-  #include <esp_heap_caps.h>   // heap_caps_free / MALLOC_CAP_SPIRAM для макроса ниже
-  #define LV_MEM_CUSTOM_ALLOC   ps_malloc
-  // ВАЖНО: free() не освобождает указатели из PSRAM (heap не default-capable)
-  // → heap_caps_free assert. heap_caps_free сам находит кучу по указателю.
-  #define LV_MEM_CUSTOM_FREE(p) heap_caps_free((p))
-  #define LV_MEM_CUSTOM_REALLOC ps_realloc
-#endif
+// Куча LVGL — во ВНУТРЕННЕЙ RAM (статический массив 64 КБ).
+// ВАЖНО: в этой конфигурации ядра (PSRAM без SPIRAM_USE_MALLOC) указатели
+// из PSRAM нельзя освобождать: и free(), и heap_caps_free() падают с assert
+// "outside heap areas". А LVGL постоянно выделяет/освобождает объекты и
+// тексты меток — поэтому его куча живёт во внутренней памяти.
+// В PSRAM только буферы кадра: выделяются один раз и не освобождаются.
+#define LV_MEM_CUSTOM 0
+#define LV_MEM_SIZE (64U * 1024U)
 
 // Тик — из millis(), без отдельного таймера
 #define LV_TICK_CUSTOM 1
@@ -40,7 +37,6 @@
 
 #define LV_USE_THEME_DEFAULT 1
 
-#define LV_MEM_SIZE (64U * 1024U)   // не используется при LV_MEM_CUSTOM
 #define LV_DPI_DEF 130
 #define LV_DISP_DEF_REFR_PERIOD 30
 #define LV_INDEV_DEF_READ_PERIOD 30
