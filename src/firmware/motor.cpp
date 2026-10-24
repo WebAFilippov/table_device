@@ -86,7 +86,6 @@ void Motor::task() {
           pendAt = now + CAL_PAUSE_MS;
         } else {
           calib.tMin = pos;              // верх = минимум тиков
-          calib.valid = true;
           saveCalib();
           postEvent(MotorEvent::CAL_HIT_MAX);
           pendSt = MotorState::IDLE;
@@ -133,7 +132,6 @@ void Motor::task() {
         pendAt = now + CAL_PAUSE_MS;
       } else {
         calib.tMin = pos;              // верх = минимум тиков
-        calib.valid = true;
         saveCalib();
         postEvent(MotorEvent::CAL_HIT_MAX);
         pendSt = MotorState::IDLE;
@@ -313,6 +311,7 @@ void Motor::stopNow() {
 // ---------- команды ----------
 
 void Motor::cmdManual(bool up) {
+  if (!calib.valid) return;   // без калибровки свободно кататься нельзя
   stopNow();
   manualUp = up;
   manualV = MANUAL_SPEED_MM_S * ticksPerMm();
@@ -320,12 +319,16 @@ void Motor::cmdManual(bool up) {
   dutyCap = NORM_DUTY_CAP;
   endLimNotified = false;
   movedSinceCmd = false;
+  pendAt = 0;                 // снимаем отложенный переход калибровки
+  pendSt = MotorState::IDLE;
 }
 
 void Motor::cmdStop() {
   stopNow();
   st = MotorState::IDLE;
   movedSinceCmd = false;
+  pendAt = 0;                 // отмена: отменяем и отложенный переход калибровки
+  pendSt = MotorState::IDLE;
 }
 
 void Motor::cmdGotoMm(float mm) {
@@ -339,6 +342,8 @@ void Motor::cmdGotoMm(float mm) {
   dutyCap = NORM_DUTY_CAP;
   endLimNotified = false;
   movedSinceCmd = false;
+  pendAt = 0;
+  pendSt = MotorState::IDLE;
 }
 
 void Motor::cmdCalibrate() {
@@ -390,8 +395,10 @@ const char* Motor::stateName() const {
 void Motor::setHeightsMm(float hMin, float hMax) {
   calib.hMin = hMin;
   calib.hMax = hMax;
-  if (calib.valid && calib.tMax > calib.tMin) {
+  // Калибровка считается завершённой только после ввода высот
+  if (calib.tMax > calib.tMin && hMax > hMin) {
     mmPerTick = (hMax - hMin) / (float)(calib.tMax - calib.tMin);
+    calib.valid = true;
   }
   saveCalib();
 }
