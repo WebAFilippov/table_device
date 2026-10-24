@@ -12,8 +12,11 @@
 #define LV_MEM_CUSTOM 1
 #if LV_MEM_CUSTOM
   #define LV_MEM_CUSTOM_INCLUDE <esp32-hal-psram.h>
+  #include <esp_heap_caps.h>   // heap_caps_free / MALLOC_CAP_SPIRAM для макроса ниже
   #define LV_MEM_CUSTOM_ALLOC   ps_malloc
-  #define LV_MEM_CUSTOM_FREE    free
+  // ВАЖНО: free() не освобождает указатели из PSRAM (heap не default-capable)
+  // → heap_caps_free assert. heap_caps_free сам находит кучу по указателю.
+  #define LV_MEM_CUSTOM_FREE(p) heap_caps_free((p))
   #define LV_MEM_CUSTOM_REALLOC ps_realloc
 #endif
 
