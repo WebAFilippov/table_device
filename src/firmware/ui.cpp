@@ -666,6 +666,7 @@ void uiBegin() {
   tft.setRotation(1);          // ландшафт 480x320
 
   Wire.begin(Pin::CTP_SDA, Pin::CTP_SCL);
+  Wire.setTimeOut(5);          // зависшая шина I2C не должна блокировать UI > 5 мс
   touchReset();
 
   lv_init();
@@ -753,7 +754,19 @@ void uiEvent(MotorEvent e) {
 }
 
 void uiTask() {
+  // ДИАГНОСТИКА: если обработчик LVGL тормозит >20 мс — печатаем максимум
+  uint32_t t0 = millis();
   lv_timer_handler();
+  uint32_t dt = millis() - t0;
+  static uint32_t maxDt = 0, lastRep = 0;
+  if (dt > maxDt) maxDt = dt;
+  if (millis() - lastRep > 5000) {
+    if (maxDt > 20) {
+      Serial0.printf("UI: slow lv_timer_handler %lu ms\n", (unsigned long)maxDt);
+    }
+    maxDt = 0;
+    lastRep = millis();
+  }
 
   // Сон: гасим подсветку после таймаута без касаний (только когда мотор стоит)
   if (sleepMin > 0 && backlightOn &&

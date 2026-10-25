@@ -39,6 +39,6 @@
 
 #define LV_DPI_DEF 130
 #define LV_DISP_DEF_REFR_PERIOD 30
-#define LV_INDEV_DEF_READ_PERIOD 30
+#define LV_INDEV_DEF_READ_PERIOD 50   // тач 20 раз/с: меньше шансов словить глюк I2C при езде
 
 #endif
