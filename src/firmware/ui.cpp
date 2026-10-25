@@ -176,6 +176,13 @@ static lv_obj_t *btnWizManual = nullptr;
 static float wizHmin = HMIN_DEFAULT_MM;   // нижняя высота (из NVS, правится)
 static float wizTravel = 0.0f;            // вычисленный ход, мм
 
+// Подпись кнопки — её дочерняя метка (первый ребёнок).
+// ВАЖНО: lv_label_set_text нельзя вызывать на самой кнопке — LVGL трактует
+// память кнопки как структуру метки, читает мусорный указатель и портит память.
+static lv_obj_t *btnLabelOf(lv_obj_t *btn) {
+  return lv_obj_get_child(btn, 0);
+}
+
 static void wizRefreshFields() {
   char b[40];
   snprintf(b, sizeof(b), "Hmin: %s", wizBuf1.length() ? wizBuf1.c_str() : "--");
@@ -204,7 +211,7 @@ static void wizShow(WizStep s) {
       lv_label_set_text(lblWizSub,
                         "Clear the table and the space\nbelow it. The table will move\ndown and up to the stops.");
       lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(btnWizPrimary, "START");
+      lv_label_set_text(btnLabelOf(btnWizPrimary), "START");
       break;
     case WIZ_DOWN:
       lv_label_set_text(lblWizSub, "Going down to the bottom stop...");
@@ -224,42 +231,42 @@ static void wizShow(WizStep s) {
                wizHmin, wizTravel, wizHmin + wizTravel);
       lv_label_set_text(lblWizSub, b);
       lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(btnWizPrimary, "OK");
+      lv_label_set_text(btnLabelOf(btnWizPrimary), "OK");
       lv_obj_clear_flag(btnWizEdit, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(btnWizEdit, "EDIT");
+      lv_label_set_text(btnLabelOf(btnWizEdit), "EDIT");
       lv_obj_clear_flag(btnWizManual, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(btnWizManual, "MANUAL");
+      lv_label_set_text(btnLabelOf(btnWizManual), "MANUAL");
       break;
     }
     case WIZ_INPUT1:
       lv_label_set_text(lblWizSub, "Enter BOTTOM height (mm):");
       lv_obj_clear_flag(lblWizH1, LV_OBJ_FLAG_HIDDEN);
       lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(btnWizPrimary, "NEXT");
+      lv_label_set_text(btnLabelOf(btnWizPrimary), "NEXT");
       break;
     case WIZ_INPUT2:
       lv_label_set_text(lblWizSub, "Enter TOP height (mm):");
       lv_obj_clear_flag(lblWizH1, LV_OBJ_FLAG_HIDDEN);
       lv_obj_clear_flag(lblWizH2, LV_OBJ_FLAG_HIDDEN);
       lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(btnWizPrimary, "SAVE");
+      lv_label_set_text(btnLabelOf(btnWizPrimary), "SAVE");
       break;
     case WIZ_EDITMIN:
       lv_label_set_text(lblWizSub, "Bottom height (mm):");
       lv_obj_clear_flag(lblWizH1, LV_OBJ_FLAG_HIDDEN);
       lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(btnWizPrimary, "OK");
+      lv_label_set_text(btnLabelOf(btnWizPrimary), "OK");
       break;
     case WIZ_DONE:
       lv_label_set_text(lblWizSub, "Calibration complete!");
       lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(btnWizPrimary, "OK");
+      lv_label_set_text(btnLabelOf(btnWizPrimary), "OK");
       break;
     case WIZ_FAIL:
       lv_label_set_text(lblWizSub,
                         "Check failed!\nEncoder or mechanics problem.\nCheck wiring and try again.");
       lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(btnWizPrimary, "RETRY");
+      lv_label_set_text(btnLabelOf(btnWizPrimary), "RETRY");
       break;
   }
   wizRefreshFields();
