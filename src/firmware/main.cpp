@@ -62,13 +62,17 @@ static void printEvent(MotorEvent e) {
       break;
     case MotorEvent::CAL_HIT_MIN:
       Serial0.printf("EVENT: нижний упор найден (ticks=%lld).\n", (long long)motor.posTicks());
-      Serial0.println("       У тебя 10 секунд — замерь высоту столешницы линейкой!");
-      Serial0.println("       Потом стол сам поедет вверх...");
+      Serial0.println("       Пауза 3 с, потом вверх...");
       break;
     case MotorEvent::CAL_HIT_MAX:
       Serial0.printf("EVENT: верхний упор найден (ticks=%lld).\n", (long long)motor.posTicks());
-      Serial0.println("       Измерь линейкой высоту столешницы внизу и вверху,");
-      Serial0.println("       затем: setH <Hмин_мм> <Hмакс_мм>");
+      Serial0.println("       Контрольный спуск вниз...");
+      break;
+    case MotorEvent::CAL_VERIFIED:
+      Serial0.println("EVENT: круговая проверка пройдена — низ подтверждён");
+      break;
+    case MotorEvent::CAL_VERIFY_FAIL:
+      Serial0.println("EVENT: круговая проверка НЕ пройдена! Проверь энкодер/механику");
       break;
     case MotorEvent::END_LIMIT:
       Serial0.println("EVENT: мягкая граница хода");

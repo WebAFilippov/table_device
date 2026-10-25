@@ -158,13 +158,23 @@ void uiNotice(const char *msg, uint32_t ms) {
 enum WizStep : uint8_t {
   WIZ_INTRO,     // предупреждение
   WIZ_DOWN,      // едем вниз
-  WIZ_PAUSE,     // нижний упор, 10 с на замер
+  WIZ_PAUSE,     // нижний упор, пауза
   WIZ_UP,        // едем вверх
-  WIZ_INPUT1,    // ввод нижней высоты
-  WIZ_INPUT2,    // ввод верхней высоты
-  WIZ_DONE       // готово
+  WIZ_VERIFY,    // контрольный спуск вниз
+  WIZ_CONFIRM,   // вычисленные значения: подтверждение
+  WIZ_INPUT1,    // ручной ввод нижней высоты (запасной режим)
+  WIZ_INPUT2,    // ручной ввод верхней высоты
+  WIZ_EDITMIN,   // правка нижней высоты (умная калибровка)
+  WIZ_DONE,      // готово
+  WIZ_FAIL       // проверка не прошла
 };
 static WizStep wizStep = WIZ_INTRO;
+
+static lv_obj_t *wizKeys[12] = {nullptr};
+static lv_obj_t *btnWizEdit = nullptr;
+static lv_obj_t *btnWizManual = nullptr;
+static float wizHmin = HMIN_DEFAULT_MM;   // нижняя высота (из NVS, правится)
+static float wizTravel = 0.0f;            // вычисленный ход, мм
 
 static void wizRefreshFields() {
   char b[40];
@@ -177,8 +187,16 @@ static void wizRefreshFields() {
 static void wizShow(WizStep s) {
   wizStep = s;
   lv_obj_add_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(btnWizEdit, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(btnWizManual, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(lblWizH1, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(lblWizH2, LV_OBJ_FLAG_HIDDEN);
+
+  bool keys = (s == WIZ_INPUT1 || s == WIZ_INPUT2 || s == WIZ_EDITMIN);
+  for (int i = 0; i < 12; i++) {
+    if (keys) lv_obj_clear_flag(wizKeys[i], LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(wizKeys[i], LV_OBJ_FLAG_HIDDEN);
+  }
 
   switch (s) {
     case WIZ_INTRO:
@@ -192,11 +210,27 @@ static void wizShow(WizStep s) {
       lv_label_set_text(lblWizSub, "Going down to the bottom stop...");
       break;
     case WIZ_PAUSE:
-      lv_label_set_text(lblWizSub, "Bottom reached.\nMeasure height now! 10 s...");
+      lv_label_set_text(lblWizSub, "Bottom reached.\nGoing up in 3 s...");
       break;
     case WIZ_UP:
       lv_label_set_text(lblWizSub, "Going up to the top stop...");
       break;
+    case WIZ_VERIFY:
+      lv_label_set_text(lblWizSub, "Top reached.\nChecking: going down...");
+      break;
+    case WIZ_CONFIRM: {
+      char b[96];
+      snprintf(b, sizeof(b), "Bottom: %.0f mm\nTravel: %.0f mm\nTop: %.0f mm",
+               wizHmin, wizTravel, wizHmin + wizTravel);
+      lv_label_set_text(lblWizSub, b);
+      lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text(btnWizPrimary, "OK");
+      lv_obj_clear_flag(btnWizEdit, LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text(btnWizEdit, "EDIT");
+      lv_obj_clear_flag(btnWizManual, LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text(btnWizManual, "MANUAL");
+      break;
+    }
     case WIZ_INPUT1:
       lv_label_set_text(lblWizSub, "Enter BOTTOM height (mm):");
       lv_obj_clear_flag(lblWizH1, LV_OBJ_FLAG_HIDDEN);
@@ -210,10 +244,22 @@ static void wizShow(WizStep s) {
       lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
       lv_label_set_text(btnWizPrimary, "SAVE");
       break;
+    case WIZ_EDITMIN:
+      lv_label_set_text(lblWizSub, "Bottom height (mm):");
+      lv_obj_clear_flag(lblWizH1, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text(btnWizPrimary, "OK");
+      break;
     case WIZ_DONE:
       lv_label_set_text(lblWizSub, "Calibration complete!");
       lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
       lv_label_set_text(btnWizPrimary, "OK");
+      break;
+    case WIZ_FAIL:
+      lv_label_set_text(lblWizSub,
+                        "Check failed!\nEncoder or mechanics problem.\nCheck wiring and try again.");
+      lv_obj_clear_flag(btnWizPrimary, LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text(btnWizPrimary, "RETRY");
       break;
   }
   wizRefreshFields();
@@ -222,6 +268,8 @@ static void wizShow(WizStep s) {
 static void wizStart() {
   wizBuf1 = "";
   wizBuf2 = "";
+  wizHmin = stGetF("hminDef", HMIN_DEFAULT_MM);
+  wizTravel = 0.0f;
   wizShow(WIZ_INTRO);
   lv_scr_load(scrWizard);
 }
@@ -319,6 +367,12 @@ static void wizPrimaryCb(lv_event_t *e) {
       wizShow(WIZ_DOWN);
       break;
 
+    case WIZ_CONFIRM:
+      // умная калибровка: подтверждаем вычисленные значения
+      motor.setHeightsMm(wizHmin, wizHmin + wizTravel);
+      wizShow(WIZ_DONE);
+      break;
+
     case WIZ_INPUT1:
       if (wizBuf1.length() == 0) { uiNotice("Enter bottom height first", 2000); return; }
       wizShow(WIZ_INPUT2);
@@ -349,13 +403,40 @@ static void wizPrimaryCb(lv_event_t *e) {
       break;
     }
 
+    case WIZ_EDITMIN: {
+      float h = wizBuf1.toFloat();
+      if (h < 300.0f || h > 2000.0f) { uiNotice("Bottom must be 300..2000 mm", 3000); return; }
+      wizHmin = h;
+      stPutF("hminDef", h);          // запоминаем нижнюю высоту
+      wizShow(WIZ_CONFIRM);
+      break;
+    }
+
     case WIZ_DONE:
       uiShowMain();
+      break;
+
+    case WIZ_FAIL:
+      motor.cmdCalibrate();          // повтор: снова вниз-вверх-вниз
+      wizShow(WIZ_DOWN);
       break;
 
     default:
       break;
   }
+}
+
+static void wizManualCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  wizBuf1 = "";
+  wizBuf2 = "";
+  wizShow(WIZ_INPUT1);
+}
+
+static void wizEditCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  wizBuf1 = String((int)wizHmin);
+  wizShow(WIZ_EDITMIN);
 }
 
 static void wizCancelCb(lv_event_t *e) {
@@ -369,7 +450,7 @@ static void wizKeyCb(lv_event_t *e) {
   const char *k = (const char *)lv_event_get_user_data(e);
   if (k == nullptr) return;
 
-  String *buf = (wizStep == WIZ_INPUT1) ? &wizBuf1 : &wizBuf2;
+  String *buf = (wizStep == WIZ_INPUT2) ? &wizBuf2 : &wizBuf1;
 
   if (strcmp(k, "BS") == 0) {
     if (buf->length() > 0) buf->remove(buf->length() - 1);
@@ -553,12 +634,15 @@ static void buildWizard() {
   };
   for (int r = 0; r < 4; r++) {
     for (int c = 0; c < 3; c++) {
-      mkBtn(scrWizard, 40 + c * 140, 170 + r * 40, 120, 36, keys[r][c], wizKeyCb, keys[r][c]);
+      wizKeys[r * 3 + c] =
+        mkBtn(scrWizard, 40 + c * 140, 170 + r * 40, 120, 36, keys[r][c], wizKeyCb, keys[r][c]);
     }
   }
 
+  btnWizManual = mkBtn(scrWizard, 40, 276, 100, 36, "MANUAL", wizManualCb, nullptr);
   btnWizPrimary = mkBtn(scrWizard, 170, 276, 140, 36, "START", wizPrimaryCb, nullptr);
-  btnWizCancel = mkBtn(scrWizard, 395, 276, 60, 36, "X", wizCancelCb, nullptr);
+  btnWizEdit = mkBtn(scrWizard, 320, 276, 80, 36, "EDIT", wizEditCb, nullptr);
+  btnWizCancel = mkBtn(scrWizard, 410, 276, 60, 36, "X", wizCancelCb, nullptr);
 }
 
 // ================= публичное API =================
@@ -623,11 +707,29 @@ void uiEvent(MotorEvent e) {
       break;
     case MotorEvent::CAL_HIT_MIN:
       if (wizActive) wizShow(WIZ_PAUSE);
-      uiNotice("Bottom reached.\nMeasure height now! 10 s...", 9000);
+      uiNotice("Bottom reached. Going up in 3 s...", 4000);
       break;
     case MotorEvent::CAL_HIT_MAX:
-      if (wizActive) wizShow(WIZ_INPUT1);
-      uiNotice("Top reached. Enter heights", 10000);
+      if (wizActive) wizShow(WIZ_VERIFY);
+      uiNotice("Top reached. Checking...", 5000);
+      break;
+    case MotorEvent::CAL_VERIFIED:
+      if (wizActive) {
+        wizHmin = stGetF("hminDef", HMIN_DEFAULT_MM);
+        int64_t range = motor.ticksMax() - motor.ticksMin();
+        wizTravel = (float)range * motor.mmPerTickValue();
+        // правдоподобность хода: 100..1500 мм
+        if (range <= 0 || wizTravel < 100.0f || wizTravel > 1500.0f) {
+          wizShow(WIZ_FAIL);
+          uiNotice("Unreasonable travel. Check!", 6000);
+        } else {
+          wizShow(WIZ_CONFIRM);
+        }
+      }
+      break;
+    case MotorEvent::CAL_VERIFY_FAIL:
+      if (wizActive) wizShow(WIZ_FAIL);
+      uiNotice("Check failed! Encoder or mechanics", 6000);
       break;
     case MotorEvent::CAL_TIMEOUT:
       uiNotice("Calibration failed", 5000);
@@ -675,7 +777,8 @@ void uiTask() {
       case MotorState::MANUAL:    lv_label_set_text(lblState, "Manual"); break;
       case MotorState::MOVE_TO:   lv_label_set_text(lblState, "Moving..."); break;
       case MotorState::CAL_DOWN:
-      case MotorState::CAL_UP:    lv_label_set_text(lblState, "Calibrating..."); break;
+      case MotorState::CAL_UP:
+      case MotorState::CAL_VERIFY: lv_label_set_text(lblState, "Calibrating..."); break;
       case MotorState::REVERSING: lv_label_set_text(lblState, "Backing off..."); break;
       case MotorState::ERROR:     lv_label_set_text(lblState, "ERROR"); break;
     }

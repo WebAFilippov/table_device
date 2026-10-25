@@ -67,7 +67,8 @@ void Motor::task() {
   // Различаем по тому, ехал ли мотор с начала команды.
   // ВАЖНО: детекция по ЗАМОРОЗКЕ позиции, а не по току — БП 5 А не тянет
   // стопорный ток мотора (14.7 А) и уходит в циклическую перезагрузку!
-  bool inCal = (st == MotorState::CAL_DOWN || st == MotorState::CAL_UP);
+  bool inCal = (st == MotorState::CAL_DOWN || st == MotorState::CAL_UP ||
+                st == MotorState::CAL_VERIFY);
   bool dutyOn = (activePin >= 0);
   if (dutyOn) {
     if (llabs(pos - stallPos) >= 2) {
@@ -84,10 +85,19 @@ void Motor::task() {
           postEvent(MotorEvent::CAL_HIT_MIN);
           pendSt = MotorState::CAL_UP;
           pendAt = now + CAL_PAUSE_MS;
-        } else {
+        } else if (st == MotorState::CAL_UP) {
           calib.tMin = pos;              // верх = минимум тиков
           saveCalib();
           postEvent(MotorEvent::CAL_HIT_MAX);
+          pendSt = MotorState::CAL_VERIFY;
+          pendAt = now + 500;
+        } else {
+          // контрольный спуск: проверяем, что низ подтвердился
+          int64_t err = llabs(pos - calib.tMax);
+          calib.tMax = pos;              // фиксируем фактический низ
+          saveCalib();
+          if (err <= CAL_VERIFY_TOL_TICKS) postEvent(MotorEvent::CAL_VERIFIED);
+          else postEvent(MotorEvent::CAL_VERIFY_FAIL);
           pendSt = MotorState::IDLE;
           pendAt = now + 300;
         }
@@ -130,10 +140,18 @@ void Motor::task() {
         postEvent(MotorEvent::CAL_HIT_MIN);
         pendSt = MotorState::CAL_UP;
         pendAt = now + CAL_PAUSE_MS;
-      } else {
+      } else if (st == MotorState::CAL_UP) {
         calib.tMin = pos;              // верх = минимум тиков
         saveCalib();
         postEvent(MotorEvent::CAL_HIT_MAX);
+        pendSt = MotorState::CAL_VERIFY;
+        pendAt = now + 500;
+      } else {
+        int64_t err = llabs(pos - calib.tMax);
+        calib.tMax = pos;
+        saveCalib();
+        if (err <= CAL_VERIFY_TOL_TICKS) postEvent(MotorEvent::CAL_VERIFIED);
+        else postEvent(MotorEvent::CAL_VERIFY_FAIL);
         pendSt = MotorState::IDLE;
         pendAt = now + 300;
       }
@@ -160,8 +178,7 @@ void Motor::task() {
   }
 
   // --- таймаут калибровки ---
-  if ((st == MotorState::CAL_DOWN || st == MotorState::CAL_UP) &&
-      (now - calStartMs > CAL_TIMEOUT_MS)) {
+  if (inCal && (now - calStartMs > CAL_TIMEOUT_MS)) {
     stopNow();
     st = MotorState::ERROR;
     postEvent(MotorEvent::CAL_TIMEOUT);
@@ -172,7 +189,8 @@ void Motor::task() {
     st = pendSt;
     pendAt = 0;
     pendSt = MotorState::IDLE;
-    if (st == MotorState::CAL_DOWN || st == MotorState::CAL_UP) {
+    if (st == MotorState::CAL_DOWN || st == MotorState::CAL_UP ||
+        st == MotorState::CAL_VERIFY) {
       calStartMs = now;
     }
   }
@@ -204,6 +222,7 @@ void Motor::task() {
     }
 
     case MotorState::CAL_DOWN:
+    case MotorState::CAL_VERIFY:
       vCmd = CAL_SPEED_MM_S * ticksPerMm();
       break;
     case MotorState::CAL_UP:
@@ -386,6 +405,7 @@ const char* Motor::stateName() const {
     case MotorState::MOVE_TO:   return "MOVE_TO";
     case MotorState::CAL_DOWN:  return "CAL_DOWN";
     case MotorState::CAL_UP:    return "CAL_UP";
+    case MotorState::CAL_VERIFY: return "CAL_VERIFY";
     case MotorState::REVERSING: return "REVERSING";
     case MotorState::ERROR:     return "ERROR";
   }
