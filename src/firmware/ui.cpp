@@ -39,6 +39,17 @@ static lv_obj_t *ddTz = nullptr;
 // --- часы (DS3231) ---
 static lv_obj_t *lblClock = nullptr;
 
+// --- экран установки даты/времени ---
+static lv_obj_t *scrClockSet = nullptr;
+static lv_obj_t *lblClkSub = nullptr;
+static lv_obj_t *lblClkField = nullptr;
+static lv_obj_t *btnClkPrimary = nullptr;
+static lv_obj_t *btnClkCancel = nullptr;
+static lv_obj_t *clkKeys[12] = {nullptr};
+enum ClkStep : uint8_t { CLK_DATE, CLK_TIME };
+static ClkStep clkStep = CLK_DATE;
+static String clkBuf1, clkBuf2;           // цифры: дата 8, время 4
+
 // --- визард калибровки ---
 static lv_obj_t *lblWizTitle = nullptr;
 static lv_obj_t *lblWizSub = nullptr;
@@ -75,6 +86,10 @@ static void timezoneCb(lv_event_t *e);
 static void wizPrimaryCb(lv_event_t *e);
 static void wizCancelCb(lv_event_t *e);
 static void wizKeyCb(lv_event_t *e);
+static void clockSetOpenCb(lv_event_t *e);
+static void clkPrimaryCb(lv_event_t *e);
+static void clkCancelCb(lv_event_t *e);
+static void clkKeyCb(lv_event_t *e);
 
 // ================= тач FT6336U =================
 
@@ -155,6 +170,8 @@ static void setSleepMin(uint8_t m) {
 void uiNotice(const char *msg, uint32_t ms) {
   if (lv_scr_act() == scrWizard) {
     lv_label_set_text(lblWizSub, msg);
+  } else if (lv_scr_act() == scrClockSet) {
+    lv_label_set_text(lblClkSub, msg);
   } else {
     lv_label_set_text(lblState, msg);
     lv_obj_set_style_text_color(lblState, lv_palette_main(LV_PALETTE_ORANGE), 0);
@@ -499,6 +516,111 @@ static void wizKeyCb(lv_event_t *e) {
   wizRefreshFields();
 }
 
+// ================= экран установки даты/времени =================
+
+static void fmtDate(const String &d, char *out, size_t n) {
+  out[0] = 0;
+  for (unsigned i = 0; i < d.length() && i < 8; i++) {
+    if (i == 2 || i == 4) strlcat(out, ".", n);
+    char c[2] = {d[i], 0};
+    strlcat(out, c, n);
+  }
+}
+
+static void fmtTime(const String &d, char *out, size_t n) {
+  out[0] = 0;
+  for (unsigned i = 0; i < d.length() && i < 4; i++) {
+    if (i == 2) strlcat(out, ":", n);
+    char c[2] = {d[i], 0};
+    strlcat(out, c, n);
+  }
+}
+
+static void clkRefresh() {
+  char b[24];
+  if (clkStep == CLK_DATE) {
+    if (clkBuf1.length() == 0) lv_label_set_text(lblClkField, "--.--.----");
+    else { fmtDate(clkBuf1, b, sizeof(b)); lv_label_set_text(lblClkField, b); }
+  } else {
+    if (clkBuf2.length() == 0) lv_label_set_text(lblClkField, "--:--");
+    else { fmtTime(clkBuf2, b, sizeof(b)); lv_label_set_text(lblClkField, b); }
+  }
+}
+
+static void clkShow(ClkStep s) {
+  clkStep = s;
+  if (s == CLK_DATE) {
+    lv_label_set_text(lblClkSub, "Enter date: DD.MM.YYYY");
+    lv_label_set_text(btnLabelOf(btnClkPrimary), "NEXT");
+  } else {
+    lv_label_set_text(lblClkSub, "Enter time: HH:MM");
+    lv_label_set_text(btnLabelOf(btnClkPrimary), "SAVE");
+  }
+  clkRefresh();
+}
+
+static void clockSetOpenCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  clkBuf1 = "";
+  clkBuf2 = "";
+  clkShow(CLK_DATE);
+  lv_scr_load(scrClockSet);
+}
+
+static void clkPrimaryCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+
+  if (clkStep == CLK_DATE) {
+    if (clkBuf1.length() != 8) { uiNotice("Date: 8 digits DDMMYYYY", 2500); return; }
+    int d = clkBuf1.substring(0, 2).toInt();
+    int m = clkBuf1.substring(2, 4).toInt();
+    int y = clkBuf1.substring(4).toInt();
+    if (d < 1 || d > 31 || m < 1 || m > 12 || y < 2000 || y > 2099) {
+      uiNotice("Bad date, check digits", 2500);
+      return;
+    }
+    clkShow(CLK_TIME);
+  } else {
+    if (clkBuf2.length() != 4) { uiNotice("Time: 4 digits HHMM", 2500); return; }
+    int hh = clkBuf2.substring(0, 2).toInt();
+    int mm = clkBuf2.substring(2).toInt();
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) { uiNotice("Bad time, check digits", 2500); return; }
+    DateTime t;
+    if (!clockGet(t)) t = DateTime();
+    t.day = clkBuf1.substring(0, 2).toInt();
+    t.mon = clkBuf1.substring(2, 4).toInt();
+    t.year = clkBuf1.substring(4).toInt();
+    t.hour = hh;
+    t.min = mm;
+    t.sec = 0;
+    clockSet(t);
+    uiShowMain();
+    uiNotice("Date & time saved", 2500);
+  }
+}
+
+static void clkCancelCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  uiShowMain();
+}
+
+static void clkKeyCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  const char *k = (const char *)lv_event_get_user_data(e);
+  if (k == nullptr) return;
+
+  String &buf = (clkStep == CLK_DATE) ? clkBuf1 : clkBuf2;
+  size_t maxLen = (clkStep == CLK_DATE) ? 8 : 4;
+  if (strcmp(k, "BS") == 0) {
+    if (buf.length()) buf.remove(buf.length() - 1);
+  } else if (strcmp(k, "C") == 0) {
+    buf = "";
+  } else if (buf.length() < maxLen && k[0] >= '0' && k[0] <= '9') {
+    buf += k;
+  }
+  clkRefresh();
+}
+
 // ================= сборка экранов =================
 
 static lv_obj_t *mkBtn(lv_obj_t *parent, int x, int y, int w, int h,
@@ -677,8 +799,9 @@ static void buildSettings() {
   lv_dropdown_set_selected(ddTz, tzIdx);
   lv_obj_add_event_cb(ddTz, timezoneCb, LV_EVENT_VALUE_CHANGED, nullptr);
 
-  // Назад
+  // Назад + установка даты/времени
   mkBtn(scrSettings, 20, 260, 160, 44, LV_SYMBOL_LEFT " Back", settingsBackCb, nullptr);
+  mkBtn(scrSettings, 200, 260, 160, 44, "Clock...", clockSetOpenCb, nullptr);
 }
 
 static void buildWizard() {
@@ -728,6 +851,44 @@ static void buildWizard() {
   btnWizCancel = mkBtn(scrWizard, 410, 276, 60, 36, "X", wizCancelCb, nullptr);
 }
 
+static void buildClockSet() {
+  scrClockSet = lv_obj_create(nullptr);
+  lv_obj_set_style_bg_color(scrClockSet, lv_color_hex(0x101418), 0);
+
+  lv_obj_t *title = lv_label_create(scrClockSet);
+  lv_label_set_text(title, "Set date & time");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
+
+  lblClkSub = lv_label_create(scrClockSet);
+  lv_obj_set_style_text_font(lblClkSub, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblClkSub, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_obj_align(lblClkSub, LV_ALIGN_TOP_MID, 0, 48);
+
+  lblClkField = lv_label_create(scrClockSet);
+  lv_obj_set_style_text_font(lblClkField, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(lblClkField, lv_color_white(), 0);
+  lv_obj_align(lblClkField, LV_ALIGN_TOP_MID, 0, 100);
+
+  // Цифровая клавиатура (только цифры: разделители подставляются сами)
+  const char *keys[4][3] = {
+    {"1", "2", "3"},
+    {"4", "5", "6"},
+    {"7", "8", "9"},
+    {"BS", "0", "C"},
+  };
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 3; c++) {
+      clkKeys[r * 3 + c] =
+        mkBtn(scrClockSet, 40 + c * 140, 170 + r * 40, 120, 36, keys[r][c], clkKeyCb, keys[r][c]);
+    }
+  }
+
+  btnClkPrimary = mkBtn(scrClockSet, 170, 276, 140, 36, "NEXT", clkPrimaryCb, nullptr);
+  btnClkCancel = mkBtn(scrClockSet, 410, 276, 60, 36, "X", clkCancelCb, nullptr);
+}
+
 // ================= публичное API =================
 
 void uiBegin() {
@@ -770,6 +931,7 @@ void uiBegin() {
   buildMain();
   buildSettings();
   buildWizard();
+  buildClockSet();
   Serial0.println("UI: init done");
 
   // Без калибровки сразу открываем визард
@@ -861,8 +1023,9 @@ void uiTask() {
     if (clockPresent() && clockGet(t) && !clockOscStopped()) {
       if (t.min != lastMin) {
         lastMin = t.min;
-        char b[16];
-        snprintf(b, sizeof(b), "%02d:%02d", t.hour, t.min);
+        char b[40];
+        snprintf(b, sizeof(b), "%02d:%02d  %s %02d.%02d",
+                 t.hour, t.min, clockWdayName(t.year, t.mon, t.day), t.day, t.mon);
         lv_label_set_text(lblClock, b);
       }
     } else if (lastMin != -2) {

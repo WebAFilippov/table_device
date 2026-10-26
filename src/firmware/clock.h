@@ -16,3 +16,4 @@ bool clockSet(const DateTime &t); // записать (24-часовой реж�
 bool clockOscStopped();         // DS3231 терял питание → время сбито
 int  clockTzMin();              // пояс из NVS (минуты)
 void clockSetTz(int tzMin);     // сменить пояс: пересчёт времени в RTC + NVS
+const char *clockWdayName(int year, int mon, int day);   // "Mon".."Sun"

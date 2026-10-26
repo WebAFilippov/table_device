@@ -82,6 +82,15 @@ int clockTzMin() {
   return (int)stGetF("tzMin", 420.0f);   // +7 часов по умолчанию (Красноярск)
 }
 
+const char *clockWdayName(int y, int m, int d) {
+  // формула Зеллера: 0 = суббота
+  if (m < 3) { m += 12; y -= 1; }
+  int k = y % 100, j = y / 100;
+  int h = (d + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 + 5 * j) % 7;
+  static const char *nm[7] = {"Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"};
+  return nm[h];
+}
+
 void clockSetTz(int tzMin) {
   tzMin = constrain(tzMin, -12 * 60, 14 * 60);
   int old = clockTzMin();
