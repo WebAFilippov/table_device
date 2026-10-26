@@ -12,6 +12,7 @@ namespace Pin {
   constexpr int CTP_SDA = 8, CTP_SCL = 9; // тач I2C
   constexpr int CTP_RST = 6;              // сброс тача
   constexpr int VIB     = 18;             // вибромотор (модуль IN/VCC/GND, 5В)
+  constexpr int BUZZER  = 17;             // пассивный зуммер (модуль I/O/VCC/GND, 5В)
 }
 
 // ================= ШИМ =================
@@ -24,6 +25,10 @@ namespace Pin {
 constexpr uint32_t PWM_FREQ = 19531;   // реально ~19.5 кГц (делитель 1)
 constexpr int      PWM_BITS = 11;
 constexpr uint32_t PWM_MAX  = (1u << PWM_BITS) - 1;   // 2047
+
+// Зуммер: LEDC, 10 бит; громкость — заполнением (20% = мягко)
+constexpr int      SND_BITS = 10;
+constexpr uint32_t SND_DUTY = 200;      // ~20% из 1023
 
 // ================= Кинематика =================
 // Измерено: 1500 тиков = 152 мм (повторяемо)

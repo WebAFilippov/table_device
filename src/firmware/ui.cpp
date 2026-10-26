@@ -47,6 +47,15 @@ static uint32_t vibPhaseEnd = 0;   // конец текущей фазы
 static uint32_t vibOnMs = 120, vibOffMs = 100;
 static lv_obj_t *vibSwitch = nullptr;
 
+// --- зуммер (мелодии) ---
+static bool sndEnabled = true;
+static lv_obj_t *sndSwitch = nullptr;
+struct SndNote { uint16_t freq; uint16_t dur; };
+static SndNote sndQueue[8];
+static uint8_t sndN = 0;
+static bool sndPlaying = false;
+static uint32_t sndNoteEnd = 0;
+
 // --- экран установки даты/времени ---
 static lv_obj_t *scrClockSet = nullptr;
 static lv_obj_t *lblClkSub = nullptr;
@@ -92,6 +101,7 @@ static void sleepCb(lv_event_t *e);
 static void manualSpeedCb(lv_event_t *e);
 static void timezoneCb(lv_event_t *e);
 static void vibCb(lv_event_t *e);
+static void sndCb(lv_event_t *e);
 static void wizPrimaryCb(lv_event_t *e);
 static void wizCancelCb(lv_event_t *e);
 static void wizKeyCb(lv_event_t *e);
@@ -213,6 +223,54 @@ static void vibCb(lv_event_t *e) {
   vibEnabled = lv_obj_has_state(vibSwitch, LV_STATE_CHECKED);
   stPutF("vibEn", vibEnabled ? 1.0f : 0.0f);
   if (vibEnabled) vibPulse(80);   // подтверждение, что включили
+}
+
+// ================= зуммер (мягкие мелодии) =================
+
+// Ноты мягкие и короткие: {частота, длительность}. Частота 0 = пауза.
+static const SndNote M_DONE[]    = {{659, 80}, {0, 60}, {784, 110}};   // «ти-там»: доехали
+static const SndNote M_SAVED[]   = {{659, 90}};                        // сохранено
+static const SndNote M_STEP[]    = {{880, 70}};                        // упор найден
+static const SndNote M_CALDONE[] = {{523, 90}, {659, 90}, {784, 110}}; // калибровка готова
+static const SndNote M_LIMIT[]   = {{784, 80}, {0, 50}, {659, 120}};   // граница хода
+static const SndNote M_WARN[]    = {{784, 90}, {0, 60}, {523, 140}};   // мягкий «спад»: ошибка
+
+static void sndEnqueue(uint16_t f, uint16_t d) {
+  if (sndN < 8) { sndQueue[sndN].freq = f; sndQueue[sndN].dur = d; sndN++; }
+}
+
+static void sndPlay(const SndNote *notes, int n) {
+  if (!sndEnabled) return;
+  for (int i = 0; i < n && sndN < 8; i++) sndEnqueue(notes[i].freq, notes[i].dur);
+}
+
+// Неблокирующий проигрыватель: зовётся из uiTask
+static void sndTask() {
+  if (!sndPlaying && sndN == 0) return;
+  if (!sndPlaying) {
+    sndPlaying = true;
+    ledcChangeFrequency(Pin::BUZZER, sndQueue[0].freq ? sndQueue[0].freq : 4000, SND_BITS);
+    ledcWrite(Pin::BUZZER, sndQueue[0].freq ? SND_DUTY : 0);
+    sndNoteEnd = millis() + sndQueue[0].dur;
+  } else if (millis() >= sndNoteEnd) {
+    for (int i = 0; i < (int)sndN - 1; i++) sndQueue[i] = sndQueue[i + 1];
+    sndN--;
+    if (sndN == 0) {
+      sndPlaying = false;
+      ledcWrite(Pin::BUZZER, 0);
+    } else {
+      ledcChangeFrequency(Pin::BUZZER, sndQueue[0].freq ? sndQueue[0].freq : 4000, SND_BITS);
+      ledcWrite(Pin::BUZZER, sndQueue[0].freq ? SND_DUTY : 0);
+      sndNoteEnd = millis() + sndQueue[0].dur;
+    }
+  }
+}
+
+static void sndCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+  sndEnabled = lv_obj_has_state(sndSwitch, LV_STATE_CHECKED);
+  stPutF("sndEn", sndEnabled ? 1.0f : 0.0f);
+  if (sndEnabled) sndPlay(M_SAVED, 1);   // подтверждение, что включили
 }
 
 // ================= уведомления =================
@@ -394,6 +452,7 @@ static void presetCb(lv_event_t *e) {
       snprintf(b, sizeof(b), "Saved P%d: %.1f cm", n, motor.posMm() / 10.0f);
       uiNotice(b, 2500);
       vibPulse(120);
+      sndPlay(M_SAVED, 1);
     }
   } else if (code == LV_EVENT_CLICKED) {
     float mm = stGetF(("p" + String(n)).c_str(), NAN);
@@ -474,6 +533,7 @@ static void wizPrimaryCb(lv_event_t *e) {
       // умная калибровка: подтверждаем вычисленные значения
       motor.setHeightsMm(wizHmin, wizHmin + wizTravel);
       vibPattern(2, 120, 120);
+      sndPlay(M_CALDONE, 3);
       wizShow(WIZ_DONE);
       break;
 
@@ -504,6 +564,7 @@ static void wizPrimaryCb(lv_event_t *e) {
 
       motor.setHeightsMm(h1, h2);
       vibPattern(2, 120, 120);
+      sndPlay(M_CALDONE, 3);
       wizShow(WIZ_DONE);
       break;
     }
@@ -865,6 +926,19 @@ static void buildSettings() {
   if (vibEnabled) lv_obj_add_state(vibSwitch, LV_STATE_CHECKED);
   lv_obj_add_event_cb(vibSwitch, vibCb, LV_EVENT_VALUE_CHANGED, nullptr);
 
+  // Звук вкл/выкл (ряд с кнопкой «Назад»)
+  lv_obj_t *ls2 = lv_label_create(scrSettings);
+  lv_label_set_text(ls2, "Snd:");
+  lv_obj_set_style_text_font(ls2, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(ls2, lv_color_white(), 0);
+  lv_obj_align(ls2, LV_ALIGN_TOP_LEFT, 366, 266);
+
+  sndSwitch = lv_switch_create(scrSettings);
+  lv_obj_align(sndSwitch, LV_ALIGN_TOP_LEFT, 410, 262);
+  lv_obj_set_size(sndSwitch, 55, 30);
+  if (sndEnabled) lv_obj_add_state(sndSwitch, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(sndSwitch, sndCb, LV_EVENT_VALUE_CHANGED, nullptr);
+
   // Назад + установка даты/времени
   mkBtn(scrSettings, 20, 260, 160, 44, LV_SYMBOL_LEFT " Back", settingsBackCb, nullptr);
   mkBtn(scrSettings, 200, 260, 160, 44, "Clock...", clockSetOpenCb, nullptr);
@@ -967,6 +1041,11 @@ void uiBegin() {
   digitalWrite(Pin::VIB, LOW);
   vibEnabled = stGetF("vibEn", 1.0f) >= 0.5f;
 
+  // Зуммер
+  ledcAttach(Pin::BUZZER, 4000, SND_BITS);
+  ledcWrite(Pin::BUZZER, 0);
+  sndEnabled = stGetF("sndEn", 1.0f) >= 0.5f;
+
   ledcAttach(Pin::LCD_BL, 5000, 8);
   ledcWrite(Pin::LCD_BL, (uint32_t)(brightPct * 255 / 100));
 
@@ -1019,20 +1098,24 @@ void uiEvent(MotorEvent e) {
     case MotorEvent::OBSTACLE:
       uiNotice("Pinch! Backing off", 3000);
       vibPattern(3, 100, 120);
+      sndPlay(M_WARN, 3);
       break;
     case MotorEvent::ENC_STALL:
       uiNotice("Encoder silent!", 5000);
       vibPattern(3, 100, 120);
+      sndPlay(M_WARN, 3);
       break;
     case MotorEvent::CAL_HIT_MIN:
       if (wizActive) wizShow(WIZ_PAUSE);
       uiNotice("Bottom reached. Going up in 3 s...", 4000);
       vibPulse(80);
+      sndPlay(M_STEP, 1);
       break;
     case MotorEvent::CAL_HIT_MAX:
       if (wizActive) wizShow(WIZ_VERIFY);
       uiNotice("Top reached. Checking...", 5000);
       vibPulse(80);
+      sndPlay(M_STEP, 1);
       break;
     case MotorEvent::CAL_VERIFIED:
       vibPulse(120);
@@ -1053,18 +1136,22 @@ void uiEvent(MotorEvent e) {
       if (wizActive) wizShow(WIZ_FAIL);
       uiNotice("Check failed! Encoder or mechanics", 6000);
       vibPattern(3, 100, 120);
+      sndPlay(M_WARN, 3);
       break;
     case MotorEvent::CAL_TIMEOUT:
       uiNotice("Calibration failed", 5000);
       vibPattern(3, 100, 120);
+      sndPlay(M_WARN, 3);
       break;
     case MotorEvent::END_LIMIT:
       uiNotice("End of travel", 2000);
       vibPattern(2, 100, 120);
+      sndPlay(M_LIMIT, 3);
       break;
     case MotorEvent::REACHED_TARGET:
       uiNotice("Done", 1500);
       vibPulse(150);
+      sndPlay(M_DONE, 3);
       break;
     default:
       break;
@@ -1073,6 +1160,7 @@ void uiEvent(MotorEvent e) {
 
 void uiTask() {
   vibTask();   // проигрывание паттернов вибрации
+  sndTask();   // проигрывание мелодий
 
   // ДИАГНОСТИКА: если обработчик LVGL тормозит >20 мс — печатаем максимум
   uint32_t t0 = millis();
