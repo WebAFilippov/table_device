@@ -103,7 +103,7 @@ static void handleLine(String s) {
 
   if (cmd == "help") {
     Serial0.println("help | status | up | down | stop | go <мм> | cal | setH <Hмин> <Hмакс>");
-    Serial0.println("save <1..4> | goP <1..4> | setOc <ампер> | resetcal");
+    Serial0.println("save <1..4> | goP <1..4> | setOc <ампер> | setV <мм/с 10..25> | resetcal");
   } else if (cmd == "status" || cmd == "pos") {
     printStatus();
     Serial0.printf("калибровка: %s | ticks[min=%lld, max=%lld] | mm/тик=%.5f\n",
@@ -143,6 +143,15 @@ static void handleLine(String s) {
       Serial0.printf("Порог перегрузки установлен: %.1f A\n", motor.ocAmps());
     } else {
       Serial0.println("Формат: setOc <ампер 1..8>");
+    }
+  } else if (cmd == "setv") {
+    float v = arg.toFloat();
+    if (v >= MANUAL_SPEED_MIN_MM_S && v <= MANUAL_SPEED_MAX_MM_S) {
+      motor.setManualSpeedMmS(v);
+      stPutF("manSpd", motor.manualSpeedMmS());
+      Serial0.printf("Ручная скорость: %.0f мм/с\n", motor.manualSpeedMmS());
+    } else {
+      Serial0.println("Формат: setV <мм/с 10..25>");
     }
   } else if (cmd == "save") {
     int n = arg.toInt();

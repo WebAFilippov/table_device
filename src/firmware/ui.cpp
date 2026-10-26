@@ -31,6 +31,8 @@ static lv_obj_t *lblPreset[4] = {nullptr, nullptr, nullptr, nullptr};
 static lv_obj_t *lblBrightnessVal = nullptr;
 static lv_obj_t *sliderBrightness = nullptr;
 static lv_obj_t *ddSleep = nullptr;
+static lv_obj_t *sliderSpeed = nullptr;
+static lv_obj_t *lblSpeedVal = nullptr;
 
 // --- визард калибровки ---
 static lv_obj_t *lblWizTitle = nullptr;
@@ -63,6 +65,7 @@ static void settingsOpenCb(lv_event_t *e);
 static void settingsBackCb(lv_event_t *e);
 static void brightnessCb(lv_event_t *e);
 static void sleepCb(lv_event_t *e);
+static void manualSpeedCb(lv_event_t *e);
 static void wizPrimaryCb(lv_event_t *e);
 static void wizCancelCb(lv_event_t *e);
 static void wizKeyCb(lv_event_t *e);
@@ -363,6 +366,19 @@ static void sleepCb(lv_event_t *e) {
   if (idx >= 0 && idx < 5) setSleepMin(sleepOptions[idx]);
 }
 
+static void manualSpeedCb(lv_event_t *e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  int v = lv_slider_get_value(sliderSpeed);
+  if (code == LV_EVENT_VALUE_CHANGED) {
+    motor.setManualSpeedMmS((float)v);
+    char b[24];
+    snprintf(b, sizeof(b), "%d mm/s", v);
+    lv_label_set_text(lblSpeedVal, b);
+  } else if (code == LV_EVENT_RELEASED) {
+    stPutF("manSpd", motor.manualSpeedMmS());   // сохраняем один раз
+  }
+}
+
 // ================= колбэки визарда =================
 
 static void wizPrimaryCb(lv_event_t *e) {
@@ -600,6 +616,30 @@ static void buildSettings() {
   for (int i = 0; i < 5; i++) if (sleepOptions[i] == sleepMin) sel = i;
   lv_dropdown_set_selected(ddSleep, sel);
   lv_obj_add_event_cb(ddSleep, sleepCb, LV_EVENT_VALUE_CHANGED, nullptr);
+
+  // Ручная скорость (10..25 мм/с)
+  lv_obj_t *lm = lv_label_create(scrSettings);
+  lv_label_set_text(lm, "Manual speed:");
+  lv_obj_set_style_text_font(lm, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lm, lv_color_white(), 0);
+  lv_obj_align(lm, LV_ALIGN_TOP_LEFT, 20, 180);
+
+  sliderSpeed = lv_slider_create(scrSettings);
+  lv_obj_set_size(sliderSpeed, 240, 10);
+  lv_obj_align(sliderSpeed, LV_ALIGN_TOP_LEFT, 180, 186);
+  lv_slider_set_range(sliderSpeed, (int32_t)MANUAL_SPEED_MIN_MM_S, (int32_t)MANUAL_SPEED_MAX_MM_S);
+  lv_slider_set_value(sliderSpeed, (int32_t)motor.manualSpeedMmS(), LV_ANIM_OFF);
+  lv_obj_add_event_cb(sliderSpeed, manualSpeedCb, LV_EVENT_ALL, nullptr);
+
+  lblSpeedVal = lv_label_create(scrSettings);
+  lv_obj_set_style_text_font(lblSpeedVal, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblSpeedVal, lv_color_white(), 0);
+  lv_obj_align(lblSpeedVal, LV_ALIGN_TOP_RIGHT, -20, 180);
+  {
+    char b[24];
+    snprintf(b, sizeof(b), "%d mm/s", (int)motor.manualSpeedMmS());
+    lv_label_set_text(lblSpeedVal, b);
+  }
 
   // Назад
   mkBtn(scrSettings, 20, 260, 160, 44, LV_SYMBOL_LEFT " Back", settingsBackCb, nullptr);

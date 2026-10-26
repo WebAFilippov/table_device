@@ -26,7 +26,9 @@ constexpr uint32_t PWM_MAX  = (1u << PWM_BITS) - 1;   // 2047
 constexpr float MM_PER_TICK_DEFAULT = 152.0f / 1500.0f;   // ~0.1013
 constexpr float TICKS_PER_MM_DEFAULT = 1500.0f / 152.0f;  // ~9.87
 
-constexpr float MANUAL_SPEED_MM_S = 10.0f;    // ручной режим (удержание)
+constexpr float MANUAL_SPEED_MM_S = 10.0f;    // ручной режим (удержание), по умолчанию
+constexpr float MANUAL_SPEED_MIN_MM_S = 10.0f; // ручная скорость: диапазон настройки
+constexpr float MANUAL_SPEED_MAX_MM_S = 25.0f;
 constexpr float PRESET_SPEED_MM_S = 15.0f;   // поездка к пресету
 constexpr float CAL_SPEED_MM_S    = 12.0f;   // калибровка: достаточно быстро, чтобы на упоре
                                              // регулятор выжал ~65% ШИМ и ток пробил порог

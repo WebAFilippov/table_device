@@ -205,6 +205,12 @@ void Motor::task() {
 
     case MotorState::MANUAL:
       vCmd = manualUp ? manualV : -manualV;   // вверх = плюс
+      // Плавное торможение: после отпускания кнопки cmdStop обнуляет manualV,
+      // контур сам сводит скорость к нулю, и только тогда выходим в IDLE
+      if (manualV == 0.0f && fabsf(vSet) < 2.0f && fabsf(vMeas) < 2.0f) {
+        st = MotorState::IDLE;
+        vCmd = 0.0f;
+      }
       break;
 
     case MotorState::MOVE_TO:
@@ -333,7 +339,7 @@ void Motor::cmdManual(bool up) {
   if (!calib.valid) return;   // без калибровки свободно кататься нельзя
   stopNow();
   manualUp = up;
-  manualV = MANUAL_SPEED_MM_S * ticksPerMm();
+  manualV = mManualSpeedMmS * ticksPerMm();   // настраиваемая скорость
   st = MotorState::MANUAL;
   dutyCap = NORM_DUTY_CAP;
   endLimNotified = false;
@@ -343,11 +349,24 @@ void Motor::cmdManual(bool up) {
 }
 
 void Motor::cmdStop() {
+  if (st == MotorState::MANUAL) {
+    // ПЛАВНОЕ торможение: не обнуляем всё мгновенно, а задаём цель 0 —
+    // контур сведёт скорость по ACCEL_MM_S2, затем состояние само уйдёт в IDLE
+    manualV = 0.0f;
+    movedSinceCmd = false;
+    pendAt = 0;
+    pendSt = MotorState::IDLE;
+    return;
+  }
   stopNow();
   st = MotorState::IDLE;
   movedSinceCmd = false;
   pendAt = 0;                 // отмена: отменяем и отложенный переход калибровки
   pendSt = MotorState::IDLE;
+}
+
+void Motor::setManualSpeedMmS(float v) {
+  mManualSpeedMmS = constrain(v, MANUAL_SPEED_MIN_MM_S, MANUAL_SPEED_MAX_MM_S);
 }
 
 void Motor::cmdGotoMm(float mm) {
@@ -451,6 +470,8 @@ void Motor::loadCalib() {
   calib.hMax    = stGetF("hMax", 0);
   mmPerTick     = stGetF("mpt", MM_PER_TICK_DEFAULT);
   ocRaw         = stGetF("oc", (float)OC_RAW);
+  mManualSpeedMmS = constrain(stGetF("manSpd", MANUAL_SPEED_MM_S),
+                              MANUAL_SPEED_MIN_MM_S, MANUAL_SPEED_MAX_MM_S);
 }
 
 void Motor::saveCalib() {

@@ -57,6 +57,9 @@ public:
   void setOcAmps(float a);                       // порог перегрузки, А (в NVS)
   float ocAmps() const { return ocRaw * RAW_TO_AMPS; }
 
+  void setManualSpeedMmS(float v);               // ручная скорость, мм/с (10..25)
+  float manualSpeedMmS() const { return mManualSpeedMmS; }
+
 private:
   float ticksPerMm() const { return 1.0f / mmPerTick; }
   void setPwm(float vCmd);                    // vCmd: тики/с, + = вверх
@@ -86,6 +89,7 @@ private:
   float mmPerTick = MM_PER_TICK_DEFAULT;
   float profileSpeed = PRESET_SPEED_MM_S;
   float manualV = 0;
+  float mManualSpeedMmS = MANUAL_SPEED_MM_S;   // настраиваемая ручная скорость
   bool manualUp = false;
 
   bool ocActive = false;
