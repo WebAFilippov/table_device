@@ -45,16 +45,25 @@ static bool vibOn = false;
 static int vibTaps = 0;            // сколько ещё включений после текущего
 static uint32_t vibPhaseEnd = 0;   // конец текущей фазы
 static uint32_t vibOnMs = 120, vibOffMs = 100;
+static float vibLvl = 1.0f;        // 0.7..1.0 (слайдер)
+static uint32_t vibDuty = 1023;    // заполнение LEDC
 static lv_obj_t *vibSwitch = nullptr;
 
 // --- зуммер (мелодии) ---
 static bool sndEnabled = true;
+static float sndLvl = 20.0f;       // 10..100 % (слайдер)
+static uint32_t sndDuty = 200;     // заполнение LEDC
 static lv_obj_t *sndSwitch = nullptr;
 struct SndNote { uint16_t freq; uint16_t dur; };
 static SndNote sndQueue[8];
 static uint8_t sndN = 0;
 static bool sndPlaying = false;
 static uint32_t sndNoteEnd = 0;
+
+// --- экран Feel & sound ---
+static lv_obj_t *scrFeedback = nullptr;
+static lv_obj_t *sliderVibLvl = nullptr, *sliderSndLvl = nullptr;
+static lv_obj_t *lblVibLvlVal = nullptr, *lblSndLvlVal = nullptr;
 
 // --- экран установки даты/времени ---
 static lv_obj_t *scrClockSet = nullptr;
@@ -102,6 +111,12 @@ static void manualSpeedCb(lv_event_t *e);
 static void timezoneCb(lv_event_t *e);
 static void vibCb(lv_event_t *e);
 static void sndCb(lv_event_t *e);
+static void feedbackOpenCb(lv_event_t *e);
+static void feedbackBackCb(lv_event_t *e);
+static void vibLvlCb(lv_event_t *e);
+static void sndLvlCb(lv_event_t *e);
+static void vibTestCb(lv_event_t *e);
+static void sndTestCb(lv_event_t *e);
 static void wizPrimaryCb(lv_event_t *e);
 static void wizCancelCb(lv_event_t *e);
 static void wizKeyCb(lv_event_t *e);
@@ -188,7 +203,7 @@ static void setSleepMin(uint8_t m) {
 
 static void vibPulse(uint32_t ms) {
   if (!vibEnabled) return;
-  digitalWrite(Pin::VIB, HIGH);
+  ledcWrite(Pin::VIB, vibDuty);
   vibOn = true;
   vibTaps = 0;
   vibPhaseEnd = millis() + ms;
@@ -207,11 +222,11 @@ static void vibTask() {
   if (!vibOn && vibTaps == 0) return;
   uint32_t now = millis();
   if (vibOn && now >= vibPhaseEnd) {
-    digitalWrite(Pin::VIB, LOW);
+    ledcWrite(Pin::VIB, 0);
     vibOn = false;
     vibPhaseEnd = (vibTaps > 0) ? (now + vibOffMs) : 0;
   } else if (!vibOn && vibTaps > 0 && now >= vibPhaseEnd) {
-    digitalWrite(Pin::VIB, HIGH);
+    ledcWrite(Pin::VIB, vibDuty);
     vibOn = true;
     vibPhaseEnd = now + vibOnMs;
     vibTaps--;
@@ -250,7 +265,7 @@ static void sndTask() {
   if (!sndPlaying) {
     sndPlaying = true;
     ledcChangeFrequency(Pin::BUZZER, sndQueue[0].freq ? sndQueue[0].freq : 4000, SND_BITS);
-    ledcWrite(Pin::BUZZER, sndQueue[0].freq ? SND_DUTY : 0);
+    ledcWrite(Pin::BUZZER, sndQueue[0].freq ? sndDuty : 0);
     sndNoteEnd = millis() + sndQueue[0].dur;
   } else if (millis() >= sndNoteEnd) {
     for (int i = 0; i < (int)sndN - 1; i++) sndQueue[i] = sndQueue[i + 1];
@@ -260,7 +275,7 @@ static void sndTask() {
       ledcWrite(Pin::BUZZER, 0);
     } else {
       ledcChangeFrequency(Pin::BUZZER, sndQueue[0].freq ? sndQueue[0].freq : 4000, SND_BITS);
-      ledcWrite(Pin::BUZZER, sndQueue[0].freq ? SND_DUTY : 0);
+      ledcWrite(Pin::BUZZER, sndQueue[0].freq ? sndDuty : 0);
       sndNoteEnd = millis() + sndQueue[0].dur;
     }
   }
@@ -271,6 +286,61 @@ static void sndCb(lv_event_t *e) {
   sndEnabled = lv_obj_has_state(sndSwitch, LV_STATE_CHECKED);
   stPutF("sndEn", sndEnabled ? 1.0f : 0.0f);
   if (sndEnabled) sndPlay(M_SAVED, 1);   // подтверждение, что включили
+}
+
+// ================= экран Feel & sound =================
+
+static void vibLvlCb(lv_event_t *e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  int v = lv_slider_get_value(sliderVibLvl);
+  if (code == LV_EVENT_VALUE_CHANGED) {
+    vibLvl = v / 100.0f;
+    vibDuty = (uint32_t)(vibLvl * 1023.0f);
+    char b[16];
+    snprintf(b, sizeof(b), "%d%%", v);
+    lv_label_set_text(lblVibLvlVal, b);
+    if (vibEnabled) vibPulse(200);   // живой отклик при движении слайдера
+  } else if (code == LV_EVENT_RELEASED) {
+    stPutF("vibLvl", vibLvl);
+  }
+}
+
+static void sndLvlCb(lv_event_t *e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  int v = lv_slider_get_value(sliderSndLvl);
+  if (code == LV_EVENT_VALUE_CHANGED) {
+    sndLvl = (float)v;
+    sndDuty = (uint32_t)(v * 1023.0f / 100.0f);
+    char b[16];
+    snprintf(b, sizeof(b), "%d%%", v);
+    lv_label_set_text(lblSndLvlVal, b);
+    if (sndEnabled) {
+      sndN = 0;                     // отменяем очередь, играем короткий отклик
+      sndPlaying = false;
+      ledcWrite(Pin::BUZZER, 0);
+      sndPlay(M_SAVED, 1);
+    }
+  } else if (code == LV_EVENT_RELEASED) {
+    stPutF("sndLvl", sndLvl);
+  }
+}
+
+static void vibTestCb(lv_event_t *e) {
+  if (lv_event_get_code(e) == LV_EVENT_CLICKED) vibPulse(400);
+}
+
+static void sndTestCb(lv_event_t *e) {
+  if (lv_event_get_code(e) == LV_EVENT_CLICKED) sndPlay(M_CALDONE, 3);
+}
+
+static void feedbackOpenCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_scr_load(scrFeedback);
+}
+
+static void feedbackBackCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_scr_load(scrSettings);
 }
 
 // ================= уведомления =================
@@ -926,22 +996,10 @@ static void buildSettings() {
   if (vibEnabled) lv_obj_add_state(vibSwitch, LV_STATE_CHECKED);
   lv_obj_add_event_cb(vibSwitch, vibCb, LV_EVENT_VALUE_CHANGED, nullptr);
 
-  // Звук вкл/выкл (ряд с кнопкой «Назад»)
-  lv_obj_t *ls2 = lv_label_create(scrSettings);
-  lv_label_set_text(ls2, "Snd:");
-  lv_obj_set_style_text_font(ls2, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(ls2, lv_color_white(), 0);
-  lv_obj_align(ls2, LV_ALIGN_TOP_LEFT, 366, 266);
-
-  sndSwitch = lv_switch_create(scrSettings);
-  lv_obj_align(sndSwitch, LV_ALIGN_TOP_LEFT, 410, 262);
-  lv_obj_set_size(sndSwitch, 55, 30);
-  if (sndEnabled) lv_obj_add_state(sndSwitch, LV_STATE_CHECKED);
-  lv_obj_add_event_cb(sndSwitch, sndCb, LV_EVENT_VALUE_CHANGED, nullptr);
-
-  // Назад + установка даты/времени
+  // Назад + установка даты/времени + отклик (вибрация/звук)
   mkBtn(scrSettings, 20, 260, 160, 44, LV_SYMBOL_LEFT " Back", settingsBackCb, nullptr);
-  mkBtn(scrSettings, 200, 260, 160, 44, "Clock...", clockSetOpenCb, nullptr);
+  mkBtn(scrSettings, 200, 260, 150, 44, "Clock...", clockSetOpenCb, nullptr);
+  mkBtn(scrSettings, 370, 260, 90, 44, "Feel", feedbackOpenCb, nullptr);
 }
 
 static void buildWizard() {
@@ -1029,6 +1087,85 @@ static void buildClockSet() {
   btnClkCancel = mkBtn(scrClockSet, 410, 276, 60, 36, "X", clkCancelCb, nullptr);
 }
 
+static void buildFeedback() {
+  scrFeedback = lv_obj_create(nullptr);
+  lv_obj_set_style_bg_color(scrFeedback, lv_color_hex(0x101418), 0);
+
+  lv_obj_t *t = lv_label_create(scrFeedback);
+  lv_label_set_text(t, "Feel & sound");
+  lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(t, lv_color_white(), 0);
+  lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 6);
+
+  // Звук: вкл/выкл + тест
+  lv_obj_t *ls = lv_label_create(scrFeedback);
+  lv_label_set_text(ls, "Sound:");
+  lv_obj_set_style_text_font(ls, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(ls, lv_color_white(), 0);
+  lv_obj_align(ls, LV_ALIGN_TOP_LEFT, 20, 56);
+
+  sndSwitch = lv_switch_create(scrFeedback);
+  lv_obj_align(sndSwitch, LV_ALIGN_TOP_LEFT, 110, 52);
+  lv_obj_set_size(sndSwitch, 60, 30);
+  if (sndEnabled) lv_obj_add_state(sndSwitch, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(sndSwitch, sndCb, LV_EVENT_VALUE_CHANGED, nullptr);
+
+  mkBtn(scrFeedback, 190, 52, 90, 36, "Test", sndTestCb, nullptr);
+
+  // Уровень звука
+  lv_obj_t *lsl = lv_label_create(scrFeedback);
+  lv_label_set_text(lsl, "Level:");
+  lv_obj_set_style_text_font(lsl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lsl, lv_color_white(), 0);
+  lv_obj_align(lsl, LV_ALIGN_TOP_LEFT, 20, 106);
+
+  sliderSndLvl = lv_slider_create(scrFeedback);
+  lv_obj_set_size(sliderSndLvl, 240, 10);
+  lv_obj_align(sliderSndLvl, LV_ALIGN_TOP_LEFT, 110, 112);
+  lv_slider_set_range(sliderSndLvl, 10, 100);
+  lv_slider_set_value(sliderSndLvl, (int32_t)sndLvl, LV_ANIM_OFF);
+  lv_obj_add_event_cb(sliderSndLvl, sndLvlCb, LV_EVENT_ALL, nullptr);
+
+  lblSndLvlVal = lv_label_create(scrFeedback);
+  lv_obj_set_style_text_font(lblSndLvlVal, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblSndLvlVal, lv_color_white(), 0);
+  lv_obj_align(lblSndLvlVal, LV_ALIGN_TOP_RIGHT, -20, 106);
+  {
+    char b[16];
+    snprintf(b, sizeof(b), "%d%%", (int)sndLvl);
+    lv_label_set_text(lblSndLvlVal, b);
+  }
+
+  // Уровень вибрации (70..100%: ниже ~74% мотор может не стартовать)
+  lv_obj_t *lvl = lv_label_create(scrFeedback);
+  lv_label_set_text(lvl, "Vib level:");
+  lv_obj_set_style_text_font(lvl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lvl, lv_color_white(), 0);
+  lv_obj_align(lvl, LV_ALIGN_TOP_LEFT, 20, 156);
+
+  sliderVibLvl = lv_slider_create(scrFeedback);
+  lv_obj_set_size(sliderVibLvl, 240, 10);
+  lv_obj_align(sliderVibLvl, LV_ALIGN_TOP_LEFT, 110, 162);
+  lv_slider_set_range(sliderVibLvl, 70, 100);
+  lv_slider_set_value(sliderVibLvl, (int32_t)(vibLvl * 100.0f), LV_ANIM_OFF);
+  lv_obj_add_event_cb(sliderVibLvl, vibLvlCb, LV_EVENT_ALL, nullptr);
+
+  lblVibLvlVal = lv_label_create(scrFeedback);
+  lv_obj_set_style_text_font(lblVibLvlVal, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblVibLvlVal, lv_color_white(), 0);
+  lv_obj_align(lblVibLvlVal, LV_ALIGN_TOP_RIGHT, -20, 156);
+  {
+    char b[16];
+    snprintf(b, sizeof(b), "%d%%", (int)(vibLvl * 100.0f));
+    lv_label_set_text(lblVibLvlVal, b);
+  }
+
+  mkBtn(scrFeedback, 370, 158, 90, 36, "Test", vibTestCb, nullptr);
+
+  // Назад
+  mkBtn(scrFeedback, 20, 262, 160, 44, LV_SYMBOL_LEFT " Back", feedbackBackCb, nullptr);
+}
+
 // ================= публичное API =================
 
 void uiBegin() {
@@ -1036,15 +1173,19 @@ void uiBegin() {
   brightPct = (uint8_t)stGetF("bright", 60.0f);
   sleepMin = (uint8_t)stGetF("sleepMin", 0.0f);
 
-  // Вибромотор
-  pinMode(Pin::VIB, OUTPUT);
-  digitalWrite(Pin::VIB, LOW);
+  // Вибромотор (LEDC — уровень вибрации регулируется заполнением)
+  ledcAttach(Pin::VIB, 1000, 10);
+  ledcWrite(Pin::VIB, 0);
   vibEnabled = stGetF("vibEn", 1.0f) >= 0.5f;
+  vibLvl = constrain(stGetF("vibLvl", 1.0f), 0.7f, 1.0f);
+  vibDuty = (uint32_t)(vibLvl * 1023.0f);
 
   // Зуммер
   ledcAttach(Pin::BUZZER, 4000, SND_BITS);
   ledcWrite(Pin::BUZZER, 0);
   sndEnabled = stGetF("sndEn", 1.0f) >= 0.5f;
+  sndLvl = constrain(stGetF("sndLvl", 20.0f), 10.0f, 100.0f);
+  sndDuty = (uint32_t)(sndLvl * 1023.0f / 100.0f);
 
   ledcAttach(Pin::LCD_BL, 5000, 8);
   ledcWrite(Pin::LCD_BL, (uint32_t)(brightPct * 255 / 100));
@@ -1082,6 +1223,7 @@ void uiBegin() {
   buildSettings();
   buildWizard();
   buildClockSet();
+  buildFeedback();
   Serial0.println("UI: init done");
 
   // Без калибровки сразу открываем визард
