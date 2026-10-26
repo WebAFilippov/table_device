@@ -51,6 +51,7 @@ bool doCheck(uint16_t &ver, char *url, size_t urlSize) {
   client.setInsecure();   // пропускаем проверку сертификата (для простоты)
   HTTPClient http;
   http.setTimeout(15000);
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   http.begin(client, apiUrl());
   int code = http.GET();
   if (code == HTTP_CODE_OK) {
@@ -67,6 +68,9 @@ bool doInstall(const char *url) {
   client.setInsecure();
   HTTPClient http;
   http.setTimeout(20000);
+  // GitHub отдаёт ассет 302-редиректом на objects.githubusercontent.com —
+  // без этого HTTPClient вернёт 302 и установка упадёт с "Update failed"
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   http.begin(client, url);
   int code = http.GET();
   if (code != HTTP_CODE_OK) { http.end(); return false; }

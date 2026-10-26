@@ -535,7 +535,7 @@ static void updateUiState(OtaState st) {
         char n[48];
         snprintf(n, sizeof(n), "Update v%s available!", fwVersionStr(otaAvailVersion()));
         uiNotice(n, 8000);
-        sndPlay(M_SAVED, 1);
+        sndPlay(M_DONE, 3);   // внятный «ти-там», а не короткий шорох
       }
       break;
     case OtaState::NO_WIFI:
