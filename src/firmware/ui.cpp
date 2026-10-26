@@ -402,6 +402,14 @@ static void wifiPopulateList() {
 static void wifiUiPoll() {
   if (lv_scr_act() != scrWifi && lv_scr_act() != scrWifiPass) return;
 
+  // Смена состояния подключения → перерисовываем список (галочка у сети)
+  static bool lastWifiConnected = false;
+  bool conn = wifiIsConnected();
+  if (conn != lastWifiConnected) {
+    lastWifiConnected = conn;
+    wifiPopulateList();
+  }
+
   if (scanWaiting && wifiScanDone()) {
     scanWaiting = false;
     uiNetCount = min(wifiScanCount(), 24);
@@ -1540,19 +1548,24 @@ void uiTask() {
     ledcWrite(Pin::LCD_BL, 0);
   }
 
-  // Часы DS3231: читаем дважды в секунду, метку обновляем при смене минуты
+  // Часы DS3231: читаем дважды в секунду, метку обновляем при смене минуты.
+  // Значок Wi-Fi рядом с часами появляется/пропадает при смене подключения.
   static uint32_t lastClockRead = 0;
   static int lastMin = -1;
+  static bool lastWifiShown = false;
   if (millis() - lastClockRead > 500) {
     lastClockRead = millis();
     wifiUiPoll();   // обновление экрана Wi-Fi (скан/статус подключения)
     DateTime t;
+    bool conn = wifiIsConnected();
     if (clockPresent() && clockGet(t) && !clockOscStopped()) {
-      if (t.min != lastMin) {
+      if (t.min != lastMin || conn != lastWifiShown) {
         lastMin = t.min;
-        char b[40];
-        snprintf(b, sizeof(b), "%02d:%02d  %s %02d.%02d",
-                 t.hour, t.min, clockWdayName(t.year, t.mon, t.day), t.day, t.mon);
+        lastWifiShown = conn;
+        char b[48];
+        snprintf(b, sizeof(b), "%02d:%02d  %s %02d.%02d%s",
+                 t.hour, t.min, clockWdayName(t.year, t.mon, t.day), t.day, t.mon,
+                 conn ? "  " LV_SYMBOL_WIFI : "");
         lv_label_set_text(lblClock, b);
       }
     } else if (lastMin != -2) {
