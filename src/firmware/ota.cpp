@@ -3,7 +3,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <Update.h>
+#include <HTTPUpdate.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -14,6 +14,17 @@ volatile uint16_t gAvail = 0;
 volatile bool wantCheck = false, wantInstall = false;
 char dlUrl[256] = "";
 uint32_t lastAutoCheck = 0;
+int gLastPct = -1;
+
+HTTPUpdate httpUpdate;
+
+void otaProgressCb(int cur, int total) {
+  gProgress = (total > 0) ? (int)((long)cur * 100 / total) : 0;
+  if (gProgress / 10 != gLastPct / 10) {
+    gLastPct = gProgress;
+    Serial0.printf("OTA: %d%% (%d из %d)\n", gProgress, cur, total);
+  }
+}
 
 const char *apiUrl() {
   static char u[160];
@@ -75,49 +86,23 @@ bool doInstall(const char *url) {
   Serial0.printf("OTA: качаю %s\n", url);
   WiFiClientSecure client;
   client.setInsecure();
-  HTTPClient http;
-  http.setTimeout(60000);
-  // GitHub отдаёт ассет 302-редиректом на objects.githubusercontent.com —
-  // без этого HTTPClient вернёт 302 и установка упадёт с "Update failed"
-  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-  http.begin(client, url);
-  int code = http.GET();
-  int len = http.getSize();
-  Serial0.printf("OTA: HTTP %d, размер %d байт\n", code, len);
-  if (code != HTTP_CODE_OK) { http.end(); return false; }
-  if (len <= 0) { http.end(); Serial0.println("OTA: размер неизвестен"); return false; }
-  if (!Update.begin((size_t)len)) {
-    Serial0.printf("OTA: Update.begin не удался: %s\n", Update.errorString());
-    http.end();
-    return false;
-  }
+  client.setTimeout(30);   // 30 с на чтение сокета
 
+  // HTTPUpdate сам ходит по 302-редиректам GitHub и пишет в OTA-раздел
+  httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  httpUpdate.rebootOnUpdate(false);
+  httpUpdate.onProgress(otaProgressCb);
   gProgress = 0;
-  WiFiClient *stream = http.getStreamPtr();
-  uint8_t buf[2048];   // 2 КБ на стеке — TLS ест много стека, не больше
-  int read = 0, total = 0;
-  int lastPct = -1;
-  while ((read = stream->read(buf, sizeof(buf))) > 0) {
-    Update.write(buf, (size_t)read);
-    total += read;
-    gProgress = (int)((long)total * 100 / len);
-    if (gProgress / 10 != lastPct / 10) {
-      lastPct = gProgress;
-      Serial0.printf("OTA: %d%% (%d из %d)\n", gProgress, total, len);
-    }
+  gLastPct = -1;
+
+  HTTPUpdateResult ret = httpUpdate.update(client, url);
+  if (ret == HTTP_UPDATE_OK) {
+    Serial0.println("OTA: записано успешно");
+    return true;
   }
-  http.end();
-  if (total != len) {
-    Update.abort();
-    Serial0.printf("OTA: загрузка оборвалась: %d из %d байт\n", total, len);
-    return false;
-  }
-  if (!Update.end()) {
-    Serial0.printf("OTA: Update.end не удался: %s\n", Update.errorString());
-    return false;
-  }
-  Serial0.println("OTA: записано успешно");
-  return true;
+  Serial0.printf("OTA: ошибка (%d): %s\n",
+                 httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+  return false;
 }
 
 void otaTaskFn(void *) {
