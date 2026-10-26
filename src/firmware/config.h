@@ -30,7 +30,7 @@ constexpr uint32_t PWM_MAX  = (1u << PWM_BITS) - 1;   // 2047
 constexpr int      SND_BITS = 10;
 
 // ================= OTA (GitHub Releases) =================
-constexpr uint16_t FW_VERSION = 103;            // версия прошивки: 103 = "1.3"
+constexpr uint16_t FW_VERSION = 104;            // версия прошивки: 104 = "1.4"
 constexpr char GITHUB_OWNER[] = "WebAFilippov"; // репозиторий с релизами
 constexpr char GITHUB_REPO[]  = "table_device";
 

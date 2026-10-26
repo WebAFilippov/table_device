@@ -272,7 +272,7 @@ void setup() {
 
   xTaskCreatePinnedToCore(motorTask, "motor", 8192, nullptr, 12, nullptr, 0);
 
-  Serial0.println("== Стол: прошивка v0.1 (CLI) ==");
+  Serial0.printf("== Стол: прошивка v%s (CLI) ==\n", fwVersionStr(fwVersion()));
   Serial0.println("help — список команд");
   printStatus();
 }
