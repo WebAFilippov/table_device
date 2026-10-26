@@ -75,7 +75,7 @@ bool doInstall(const char *url) {
 
   gProgress = 0;
   WiFiClient *stream = http.getStreamPtr();
-  uint8_t buf[4096];
+  uint8_t buf[2048];   // 2 КБ на стеке — TLS ест много стека, не больше
   int read = 0, total = 0;
   while ((read = stream->read(buf, sizeof(buf))) > 0) {
     Update.write(buf, (size_t)read);
@@ -132,7 +132,9 @@ void otaTaskFn(void *) {
 void otaBegin() {
   // первая проверка через 30 с (чтобы WiFi успел подключиться)
   lastAutoCheck = millis() - (24UL * 3600UL * 1000UL) + 30000UL;
-  xTaskCreatePinnedToCore(otaTaskFn, "ota", 8192, nullptr, 1, nullptr, 0);
+  // Стек 16 КБ: TLS-скачивание прошивки ест много стека (был stack canary
+  // panic при 8 КБ)
+  xTaskCreatePinnedToCore(otaTaskFn, "ota", 16384, nullptr, 1, nullptr, 0);
 }
 
 void otaCheck() { wantCheck = true; }

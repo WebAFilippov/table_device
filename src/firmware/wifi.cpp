@@ -107,7 +107,7 @@ void wifiBegin() {
     wantConnect = true;
     Serial0.printf("WiFi: авто-подключение к %s...\n", wantSsid);
   }
-  xTaskCreatePinnedToCore(wifiTaskFn, "wifi", 8192, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(wifiTaskFn, "wifi", 10240, nullptr, 1, nullptr, 0);
 }
 
 bool wifiIsConnected() { return WiFi.status() == WL_CONNECTED; }
