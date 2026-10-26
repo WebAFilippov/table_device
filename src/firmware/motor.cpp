@@ -48,12 +48,12 @@ void Motor::task() {
 
   pos = enc.getCount();
 
-  // --- скорость (тики/с), вверх = отрицательные тики ---
+  // --- скорость (тики/с), вверх = положительные тики (мотор развёрнут) ---
   float vRaw = (float)(pos - lastPos) / dt;
   lastPos = pos;
   vFilt += V_FILT_A * (vRaw - vFilt);
   vMeas = vFilt;
-  vMmS = -vMeas * mmPerTick;   // вверх = положительная
+  vMmS = vMeas * mmPerTick;   // вверх = положительная
 
   // --- ток ---
   int r = analogRead(Pin::IS_R);
@@ -81,20 +81,20 @@ void Motor::task() {
         // упор найден по заморозке позиции
         stopNow();
         if (st == MotorState::CAL_DOWN) {
-          calib.tMax = pos;              // низ = максимум тиков
+          calib.tMin = pos;              // низ = минимум тиков
           postEvent(MotorEvent::CAL_HIT_MIN);
           pendSt = MotorState::CAL_UP;
           pendAt = now + CAL_PAUSE_MS;
         } else if (st == MotorState::CAL_UP) {
-          calib.tMin = pos;              // верх = минимум тиков
+          calib.tMax = pos;              // верх = максимум тиков
           saveCalib();
           postEvent(MotorEvent::CAL_HIT_MAX);
           pendSt = MotorState::CAL_VERIFY;
           pendAt = now + 500;
         } else {
           // контрольный спуск: проверяем, что низ подтвердился
-          int64_t err = llabs(pos - calib.tMax);
-          calib.tMax = pos;              // фиксируем фактический низ
+          int64_t err = llabs(pos - calib.tMin);
+          calib.tMin = pos;              // фиксируем фактический низ
           saveCalib();
           if (err <= CAL_VERIFY_TOL_TICKS) postEvent(MotorEvent::CAL_VERIFIED);
           else postEvent(MotorEvent::CAL_VERIFY_FAIL);
@@ -136,19 +136,19 @@ void Motor::task() {
     if (inCal) {
       stopNow();
       if (st == MotorState::CAL_DOWN) {
-        calib.tMax = pos;              // низ = максимум тиков
+        calib.tMin = pos;              // низ = минимум тиков
         postEvent(MotorEvent::CAL_HIT_MIN);
         pendSt = MotorState::CAL_UP;
         pendAt = now + CAL_PAUSE_MS;
       } else if (st == MotorState::CAL_UP) {
-        calib.tMin = pos;              // верх = минимум тиков
+        calib.tMax = pos;              // верх = максимум тиков
         saveCalib();
         postEvent(MotorEvent::CAL_HIT_MAX);
         pendSt = MotorState::CAL_VERIFY;
         pendAt = now + 500;
       } else {
-        int64_t err = llabs(pos - calib.tMax);
-        calib.tMax = pos;
+        int64_t err = llabs(pos - calib.tMin);
+        calib.tMin = pos;
         saveCalib();
         if (err <= CAL_VERIFY_TOL_TICKS) postEvent(MotorEvent::CAL_VERIFIED);
         else postEvent(MotorEvent::CAL_VERIFY_FAIL);
@@ -204,7 +204,7 @@ void Motor::task() {
       break;
 
     case MotorState::MANUAL:
-      vCmd = manualUp ? -manualV : manualV;
+      vCmd = manualUp ? manualV : -manualV;   // вверх = плюс
       break;
 
     case MotorState::MOVE_TO:
@@ -223,10 +223,10 @@ void Motor::task() {
 
     case MotorState::CAL_DOWN:
     case MotorState::CAL_VERIFY:
-      vCmd = CAL_SPEED_MM_S * ticksPerMm();
+      vCmd = -CAL_SPEED_MM_S * ticksPerMm();  // вниз = минус
       break;
     case MotorState::CAL_UP:
-      vCmd = -CAL_SPEED_MM_S * ticksPerMm();
+      vCmd = CAL_SPEED_MM_S * ticksPerMm();   // вверх = плюс
       break;
   }
 
@@ -355,7 +355,7 @@ void Motor::cmdGotoMm(float mm) {
   float range = calib.hMax - calib.hMin;
   if (range <= 0.0f) return;
   mm = constrain(mm, calib.hMin, calib.hMax);
-  target = calib.tMax - (int64_t)((mm - calib.hMin) / mmPerTick);
+  target = calib.tMin + (int64_t)((mm - calib.hMin) / mmPerTick);
   profileSpeed = PRESET_SPEED_MM_S;
   st = MotorState::MOVE_TO;
   dutyCap = NORM_DUTY_CAP;
@@ -366,7 +366,8 @@ void Motor::cmdGotoMm(float mm) {
 }
 
 void Motor::cmdCalibrate() {
-  if (st == MotorState::CAL_DOWN || st == MotorState::CAL_UP) return;
+  if (st == MotorState::CAL_DOWN || st == MotorState::CAL_UP ||
+      st == MotorState::CAL_VERIFY) return;
   stopNow();
   calib.valid = false;   // старые значения недействительны до конца калибровки
   calStartMs = millis();
@@ -395,7 +396,7 @@ MotorEvent Motor::pollEvent() {
 
 float Motor::posMm() const {
   if (!calib.valid) return NAN;
-  return calib.hMin + (float)(calib.tMax - pos) * mmPerTick;
+  return calib.hMin + (float)(pos - calib.tMin) * mmPerTick;
 }
 
 const char* Motor::stateName() const {
@@ -433,14 +434,23 @@ void Motor::setOcAmps(float a) {
 // ---------- NVS ----------
 
 void Motor::loadCalib() {
-  calib.valid   = stGetB("cvalid", false);
-  calib.tMin    = stGetI64("tMin", 0);
-  calib.tMax    = stGetI64("tMax", 0);
+  // Версия формата: если физика изменилась (мотор развёрнут) — старая
+  // калибровка из NVS недействительна, визард запустится заново
+  if (stGetF("cfgVer", 0.0f) != CAL_CFG_VERSION) {
+    calib.valid = false;
+    calib.tMin = 0;
+    calib.tMax = 0;
+    calib.savedPos = 0;
+  } else {
+    calib.valid   = stGetB("cvalid", false);
+    calib.tMin    = stGetI64("tMin", 0);
+    calib.tMax    = stGetI64("tMax", 0);
+    calib.savedPos = stGetI64("pos", 0);
+  }
   calib.hMin    = stGetF("hMin", 0);
   calib.hMax    = stGetF("hMax", 0);
   mmPerTick     = stGetF("mpt", MM_PER_TICK_DEFAULT);
-  calib.savedPos = stGetI64("pos", 0);
-  ocRaw          = stGetF("oc", (float)OC_RAW);
+  ocRaw         = stGetF("oc", (float)OC_RAW);
 }
 
 void Motor::saveCalib() {
@@ -448,6 +458,7 @@ void Motor::saveCalib() {
   if (now - lastSave < 2000) return;   // не молотим флеш
   lastSave = now;
   calib.savedPos = pos;
+  stPutF("cfgVer", CAL_CFG_VERSION);
   stPutB("cvalid", calib.valid);
   stPutI64("tMin", calib.tMin);
   stPutI64("tMax", calib.tMax);

@@ -59,9 +59,9 @@ public:
 
 private:
   float ticksPerMm() const { return 1.0f / mmPerTick; }
-  void setPwm(float vCmd);                    // vCmd: тики/с, + = вниз
+  void setPwm(float vCmd);                    // vCmd: тики/с, + = вверх
   float profileVel(int64_t errTicks) const;   // S-профиль по дистанции
-  void applyDuty(float d);                    // d: + = вниз, - = вверх
+  void applyDuty(float d);                    // d: + = вверх (RPWM), - = вниз (LPWM)
   void stopNow();
   void postEvent(MotorEvent e);
   void loadCalib();
@@ -69,7 +69,7 @@ private:
 
   struct Calib {
     bool valid = false;
-    int64_t tMin = 0, tMax = 0;   // тики: верх = минимум, низ = максимум
+    int64_t tMin = 0, tMax = 0;   // тики: низ = минимум, верх = максимум
     int64_t savedPos = 0;         // позиция на момент выключения
     float hMin = 0, hMax = 0;     // высоты в мм (от пола)
   } calib;
