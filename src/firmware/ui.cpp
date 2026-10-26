@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "config.h"
 #include "storage.h"
+#include "clock.h"
 #include <TFT_eSPI.h>
 #include <Wire.h>
 #include <esp32-hal-psram.h>
@@ -33,6 +34,10 @@ static lv_obj_t *sliderBrightness = nullptr;
 static lv_obj_t *ddSleep = nullptr;
 static lv_obj_t *sliderSpeed = nullptr;
 static lv_obj_t *lblSpeedVal = nullptr;
+static lv_obj_t *ddTz = nullptr;
+
+// --- часы (DS3231) ---
+static lv_obj_t *lblClock = nullptr;
 
 // --- визард калибровки ---
 static lv_obj_t *lblWizTitle = nullptr;
@@ -66,6 +71,7 @@ static void settingsBackCb(lv_event_t *e);
 static void brightnessCb(lv_event_t *e);
 static void sleepCb(lv_event_t *e);
 static void manualSpeedCb(lv_event_t *e);
+static void timezoneCb(lv_event_t *e);
 static void wizPrimaryCb(lv_event_t *e);
 static void wizCancelCb(lv_event_t *e);
 static void wizKeyCb(lv_event_t *e);
@@ -379,6 +385,12 @@ static void manualSpeedCb(lv_event_t *e) {
   }
 }
 
+static void timezoneCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+  int idx = lv_dropdown_get_selected(ddTz);
+  if (idx >= 0 && idx <= 10) clockSetTz((idx + 2) * 60);   // UTC+2 .. UTC+12
+}
+
 // ================= колбэки визарда =================
 
 static void wizPrimaryCb(lv_event_t *e) {
@@ -506,18 +518,25 @@ static void buildMain() {
   scrMain = lv_obj_create(nullptr);
   lv_obj_set_style_bg_color(scrMain, lv_color_hex(0x101418), 0);
 
+  // Часы сверху (DS3231)
+  lblClock = lv_label_create(scrMain);
+  lv_obj_set_style_text_font(lblClock, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblClock, lv_color_white(), 0);
+  lv_obj_align(lblClock, LV_ALIGN_TOP_MID, 0, 2);
+  lv_label_set_text(lblClock, "--:--");
+
   // Высота крупно (в сантиметрах)
   lblHeight = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblHeight, &lv_font_montserrat_48, 0);
   lv_obj_set_style_text_color(lblHeight, lv_color_white(), 0);
-  lv_obj_align(lblHeight, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_align(lblHeight, LV_ALIGN_TOP_MID, 0, 26);
   lv_label_set_text(lblHeight, "-- cm");
 
   // Статусная строка
   lblState = lv_label_create(scrMain);
   lv_obj_set_style_text_font(lblState, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(lblState, lv_palette_main(LV_PALETTE_GREY), 0);
-  lv_obj_align(lblState, LV_ALIGN_TOP_MID, 0, 82);
+  lv_obj_align(lblState, LV_ALIGN_TOP_MID, 0, 88);
   lv_label_set_text(lblState, "Ready");
 
   // Настройки (шестерёнка)
@@ -640,6 +659,23 @@ static void buildSettings() {
     snprintf(b, sizeof(b), "%d mm/s", (int)motor.manualSpeedMmS());
     lv_label_set_text(lblSpeedVal, b);
   }
+
+  // Часовой пояс (UTC+2..+12)
+  lv_obj_t *ltz = lv_label_create(scrSettings);
+  lv_label_set_text(ltz, "Time zone:");
+  lv_obj_set_style_text_font(ltz, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(ltz, lv_color_white(), 0);
+  lv_obj_align(ltz, LV_ALIGN_TOP_LEFT, 20, 226);
+
+  ddTz = lv_dropdown_create(scrSettings);
+  lv_dropdown_set_options(ddTz,
+    "UTC+2\nUTC+3\nUTC+4\nUTC+5\nUTC+6\nUTC+7\nUTC+8\nUTC+9\nUTC+10\nUTC+11\nUTC+12");
+  lv_obj_align(ddTz, LV_ALIGN_TOP_LEFT, 180, 220);
+  lv_obj_set_size(ddTz, 180, 45);
+  lv_obj_set_style_text_font(ddTz, &lv_font_montserrat_20, 0);
+  int tzIdx = constrain(clockTzMin() / 60 - 2, 0, 10);
+  lv_dropdown_set_selected(ddTz, tzIdx);
+  lv_obj_add_event_cb(ddTz, timezoneCb, LV_EVENT_VALUE_CHANGED, nullptr);
 
   // Назад
   mkBtn(scrSettings, 20, 260, 160, 44, LV_SYMBOL_LEFT " Back", settingsBackCb, nullptr);
@@ -814,6 +850,25 @@ void uiTask() {
       (millis() - lastActivity > (uint32_t)sleepMin * 60000UL)) {
     backlightOn = false;
     ledcWrite(Pin::LCD_BL, 0);
+  }
+
+  // Часы DS3231: читаем дважды в секунду, метку обновляем при смене минуты
+  static uint32_t lastClockRead = 0;
+  static int lastMin = -1;
+  if (millis() - lastClockRead > 500) {
+    lastClockRead = millis();
+    DateTime t;
+    if (clockPresent() && clockGet(t) && !clockOscStopped()) {
+      if (t.min != lastMin) {
+        lastMin = t.min;
+        char b[16];
+        snprintf(b, sizeof(b), "%02d:%02d", t.hour, t.min);
+        lv_label_set_text(lblClock, b);
+      }
+    } else if (lastMin != -2) {
+      lastMin = -2;
+      lv_label_set_text(lblClock, "--:--");
+    }
   }
 
   static uint32_t last = 0;

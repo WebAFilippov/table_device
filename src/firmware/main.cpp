@@ -30,6 +30,7 @@
 #include "motor.h"
 #include "storage.h"
 #include "ui.h"
+#include "clock.h"
 
 Motor motor;
 
@@ -104,6 +105,7 @@ static void handleLine(String s) {
   if (cmd == "help") {
     Serial0.println("help | status | up | down | stop | go <мм> | cal | setH <Hмин> <Hмакс>");
     Serial0.println("save <1..4> | goP <1..4> | setOc <ампер> | setV <мм/с 10..25> | resetcal");
+    Serial0.println("time | setTime ЧЧ:ММ[:СС] [ДД.ММ.ГГГГ] | setTz <+7>");
   } else if (cmd == "status" || cmd == "pos") {
     printStatus();
     Serial0.printf("калибровка: %s | ticks[min=%lld, max=%lld] | mm/тик=%.5f\n",
@@ -153,6 +155,47 @@ static void handleLine(String s) {
     } else {
       Serial0.println("Формат: setV <мм/с 10..25>");
     }
+  } else if (cmd == "time") {
+    DateTime t;
+    if (clockGet(t)) {
+      Serial0.printf("Время: %02d:%02d:%02d  %02d.%02d.%04d (UTC%+d)\n",
+                     t.hour, t.min, t.sec, t.day, t.mon, t.year, clockTzMin() / 60);
+      if (clockOscStopped()) {
+        Serial0.println("ВНИМАНИЕ: DS3231 терял питание — время сбито, задай setTime");
+      }
+    } else {
+      Serial0.println("DS3231 не найден на шине I2C");
+    }
+  } else if (cmd == "settime") {
+    int hh = -1, mm = -1, ss = 0, dd = 0, mo = 0, yyyy = 0;
+    int n = sscanf(arg.c_str(), "%d:%d:%d %d.%d.%d", &hh, &mm, &ss, &dd, &mo, &yyyy);
+    if (n >= 2 && hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59 && ss >= 0 && ss <= 59) {
+      DateTime t;
+      bool haveDate = (n >= 5 && dd >= 1 && dd <= 31 && mo >= 1 && mo <= 12 && yyyy >= 2000);
+      if (!haveDate && !clockGet(t)) t = DateTime();
+      t.hour = hh;
+      t.min = mm;
+      t.sec = ss;
+      if (haveDate) { t.day = dd; t.mon = mo; t.year = yyyy; t.wday = 1; }
+      clockSet(t);
+      Serial0.printf("Записано: %02d:%02d:%02d %02d.%02d.%04d\n",
+                     t.hour, t.min, t.sec, t.day, t.mon, t.year);
+    } else {
+      Serial0.println("Формат: setTime ЧЧ:ММ[:СС] [ДД.ММ.ГГГГ]");
+    }
+  } else if (cmd == "settz") {
+    int tzMin = 0;
+    if (arg.length() > 0 && (arg[0] == '+' || arg[0] == '-')) {
+      tzMin = arg.toInt() * 60;
+    } else {
+      tzMin = arg.toInt();
+    }
+    if (tzMin >= -720 && tzMin <= 840) {
+      clockSetTz(tzMin);
+      Serial0.printf("Часовой пояс: UTC%+d\n", clockTzMin() / 60);
+    } else {
+      Serial0.println("Формат: setTz <+7> (или минуты, напр. 420)");
+    }
   } else if (cmd == "save") {
     int n = arg.toInt();
     if (n >= 1 && n <= 4 && motor.calibrated()) {
@@ -199,6 +242,7 @@ void setup() {
   motor.begin();
 
   uiBegin();
+  clockBegin();   // DS3231: после uiBegin (Wire уже поднят на GPIO8/9)
 
 
   // Диагностика PSRAM (важно для LVGL)
