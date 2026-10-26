@@ -45,12 +45,12 @@ constexpr float RAW_TO_AMPS = ADC_FS_V / 4095.0f * 8.5f;  // *kILIS(8500)/1000 �
 constexpr float OC_THRESH_A = 4.5f;                       // порог перегрузки
 constexpr int   OC_RAW      = (int)(OC_THRESH_A / RAW_TO_AMPS); // ~700
 constexpr uint32_t OC_HOLD_MS     = 250;    // держать ток выше порога, чтобы не ловить пики
-constexpr int   END_MARGIN_TICKS  = 100;    // ~10 мм от упора = «у края»
+constexpr int   END_MARGIN_TICKS  = 200;    // ~20 мм от упора = «у края»
 constexpr uint32_t STALL_DETECT_MS  = 500;    // мотор включён, позиция стоит столько = упор/застревание
 constexpr uint32_t CAL_TIMEOUT_MS = 120000; // калибровка: не нашли упор за это время
 constexpr uint32_t CAL_PAUSE_MS   = 3000;   // пауза на нижнем упоре перед ходом вверх
 constexpr int   CAL_VERIFY_TOL_TICKS = 50;  // допуск круговой проверки (~5 мм)
-constexpr float HMIN_DEFAULT_MM  = 740.0f;  // нижняя высота по умолчанию (правится в UI)
+constexpr float HMIN_DEFAULT_MM  = 755.0f;  // нижняя высота по умолчанию (правится в UI)
 constexpr float CAL_CFG_VERSION  = 2.0f;    // версия формата калибровки: несовпадение
                                             // в NVS = старая калибровка недействительна
                                             // (v2: мотор развёрнут — тики растут вверх)
