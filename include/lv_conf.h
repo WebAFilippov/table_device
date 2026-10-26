@@ -35,6 +35,10 @@
 #define LV_FONT_MONTSERRAT_28 1
 #define LV_FONT_MONTSERRAT_48 1
 
+// Для ввода пароля Wi-Fi
+#define LV_USE_TEXTAREA 1
+#define LV_USE_KEYBOARD 1
+
 #define LV_USE_THEME_DEFAULT 1
 
 #define LV_DPI_DEF 130

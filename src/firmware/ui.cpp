@@ -2,6 +2,7 @@
 #include "config.h"
 #include "storage.h"
 #include "clock.h"
+#include "wifi.h"
 #include <TFT_eSPI.h>
 #include <Wire.h>
 #include <esp32-hal-psram.h>
@@ -65,6 +66,19 @@ static lv_obj_t *scrFeedback = nullptr;
 static lv_obj_t *sliderVibLvl = nullptr, *sliderSndLvl = nullptr;
 static lv_obj_t *lblVibLvlVal = nullptr, *lblSndLvlVal = nullptr;
 
+// --- экраны Wi-Fi ---
+static lv_obj_t *scrWifi = nullptr;
+static lv_obj_t *scrWifiPass = nullptr;
+static lv_obj_t *lblWifiStatus = nullptr;
+static lv_obj_t *lstWifi = nullptr;
+static lv_obj_t *lblWifiSsid = nullptr;
+static lv_obj_t *taWifiPass = nullptr;
+static lv_obj_t *kbWifiPass = nullptr;
+static WifiNet uiNets[24];
+static int uiNetCount = 0;
+static char uiSelSsid[33] = "";
+static bool scanWaiting = false;
+
 // --- экран установки даты/времени ---
 static lv_obj_t *scrClockSet = nullptr;
 static lv_obj_t *lblClkSub = nullptr;
@@ -117,6 +131,13 @@ static void vibLvlCb(lv_event_t *e);
 static void sndLvlCb(lv_event_t *e);
 static void vibTestCb(lv_event_t *e);
 static void sndTestCb(lv_event_t *e);
+static void wifiOpenCb(lv_event_t *e);
+static void wifiBackCb(lv_event_t *e);
+static void wifiScanCb(lv_event_t *e);
+static void wifiForgetCb(lv_event_t *e);
+static void wifiItemCb(lv_event_t *e);
+static void wifiPassConnectCb(lv_event_t *e);
+static void wifiPassCancelCb(lv_event_t *e);
 static void wizPrimaryCb(lv_event_t *e);
 static void wizCancelCb(lv_event_t *e);
 static void wizKeyCb(lv_event_t *e);
@@ -341,6 +362,134 @@ static void feedbackOpenCb(lv_event_t *e) {
 static void feedbackBackCb(lv_event_t *e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   lv_scr_load(scrSettings);
+}
+
+// ================= Wi-Fi =================
+
+static const char *authName(uint8_t a) {
+  switch (a) {
+    case WIFI_AUTH_OPEN: return "open";
+    case WIFI_AUTH_WEP: return "WEP";
+    case WIFI_AUTH_WPA_PSK: return "WPA";
+    case WIFI_AUTH_WPA2_PSK: return "WPA2";
+    case WIFI_AUTH_WPA_WPA2_PSK: return "WPA2";
+    case WIFI_AUTH_WPA2_ENTERPRISE: return "802.1X";
+    case WIFI_AUTH_WPA3_PSK: return "WPA3";
+    case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA3";
+    default: return "WAPI";
+  }
+}
+
+static void wifiPopulateList() {
+  if (lstWifi == nullptr) return;
+  lv_obj_clean(lstWifi);
+  for (int i = 0; i < uiNetCount; i++) {
+    const WifiNet &n = uiNets[i];
+    char b[96];
+    // «замочек» — текстом (в шрифте нет иконки замка): open / WPA2 / WPA3...
+    // уровень — в dBm; у подключённой сети спереди галочка
+    char pre[8] = "";
+    if (wifiIsConnected() && wifiCurrentSsid() == String(n.ssid)) {
+      strcpy(pre, LV_SYMBOL_OK " ");
+    }
+    snprintf(b, sizeof(b), "%s%s    %d dBm  %s", pre, n.ssid, (int)n.rssi, authName(n.auth));
+    lv_obj_t *btn = lv_list_add_btn(lstWifi, nullptr, b);
+    lv_obj_add_event_cb(btn, wifiItemCb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+  }
+}
+
+// Обновление экранов Wi-Fi: зовётся из uiTask каждые 500 мс
+static void wifiUiPoll() {
+  if (lv_scr_act() != scrWifi && lv_scr_act() != scrWifiPass) return;
+
+  if (scanWaiting && wifiScanDone()) {
+    scanWaiting = false;
+    uiNetCount = min(wifiScanCount(), 24);
+    for (int i = 0; i < uiNetCount; i++) uiNets[i] = wifiNet(i);
+    wifiPopulateList();
+    if (uiNetCount == 0) lv_label_set_text(lblWifiStatus, "No networks found");
+    else lv_label_set_text(lblWifiStatus, "Select a network");
+  }
+
+  if (wifiConnectDone()) {
+    if (wifiConnectOk()) {
+      char b[96];
+      snprintf(b, sizeof(b), LV_SYMBOL_OK " Connected, IP %s", wifiIp().c_str());
+      lv_label_set_text(lblWifiStatus, b);
+    } else {
+      lv_label_set_text(lblWifiStatus, "Connection failed");
+    }
+  } else if (wifiConnectBusy()) {
+    lv_label_set_text(lblWifiStatus, "Connecting...");
+  } else if (wifiIsConnected()) {
+    char b[96];
+    snprintf(b, sizeof(b), LV_SYMBOL_WIFI " %s  %d dBm  %s",
+             wifiCurrentSsid().c_str(), (int)wifiRssi(), wifiIp().c_str());
+    lv_label_set_text(lblWifiStatus, b);
+  }
+}
+
+static void wifiOpenCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (wifiIsConnected()) {
+    char b[96];
+    snprintf(b, sizeof(b), LV_SYMBOL_WIFI " %s  %d dBm", wifiCurrentSsid().c_str(), (int)wifiRssi());
+    lv_label_set_text(lblWifiStatus, b);
+  } else {
+    lv_label_set_text(lblWifiStatus, "Scanning...");
+  }
+  wifiRequestScan();
+  scanWaiting = true;
+  lv_scr_load(scrWifi);
+}
+
+static void wifiBackCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_scr_load(scrSettings);
+}
+
+static void wifiScanCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_label_set_text(lblWifiStatus, "Scanning...");
+  wifiRequestScan();
+  scanWaiting = true;
+}
+
+static void wifiForgetCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  wifiErase();
+  lv_label_set_text(lblWifiStatus, "Network forgotten");
+}
+
+static void wifiItemCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  int i = (int)(intptr_t)lv_event_get_user_data(e);
+  if (i < 0 || i >= uiNetCount) return;
+  const WifiNet &n = uiNets[i];
+  strncpy(uiSelSsid, n.ssid, 32);
+  uiSelSsid[32] = 0;
+
+  if (n.auth == WIFI_AUTH_OPEN) {
+    wifiConnect(uiSelSsid, "");
+    lv_label_set_text(lblWifiStatus, "Connecting...");
+  } else {
+    lv_label_set_text(lblWifiSsid, uiSelSsid);
+    String savedPass = (wifiSavedSsid() == String(uiSelSsid)) ? wifiSavedPass() : "";
+    lv_textarea_set_text(taWifiPass, savedPass.c_str());
+    lv_scr_load(scrWifiPass);
+  }
+}
+
+static void wifiPassConnectCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  const char *pass = lv_textarea_get_text(taWifiPass);
+  wifiConnect(uiSelSsid, pass);
+  lv_scr_load(scrWifi);
+  lv_label_set_text(lblWifiStatus, "Connecting...");
+}
+
+static void wifiPassCancelCb(lv_event_t *e) {
+  if (lv_event_get_code(e) == LV_EVENT_CLICKED) lv_scr_load(scrWifi);
 }
 
 // ================= уведомления =================
@@ -996,10 +1145,11 @@ static void buildSettings() {
   if (vibEnabled) lv_obj_add_state(vibSwitch, LV_STATE_CHECKED);
   lv_obj_add_event_cb(vibSwitch, vibCb, LV_EVENT_VALUE_CHANGED, nullptr);
 
-  // Назад + установка даты/времени + отклик (вибрация/звук)
-  mkBtn(scrSettings, 20, 260, 160, 44, LV_SYMBOL_LEFT " Back", settingsBackCb, nullptr);
-  mkBtn(scrSettings, 200, 260, 150, 44, "Clock...", clockSetOpenCb, nullptr);
-  mkBtn(scrSettings, 370, 260, 90, 44, "Feel", feedbackOpenCb, nullptr);
+  // Назад + Wi-Fi + дата/время + отклик
+  mkBtn(scrSettings, 20, 260, 100, 44, LV_SYMBOL_LEFT " Back", settingsBackCb, nullptr);
+  mkBtn(scrSettings, 130, 260, 100, 44, LV_SYMBOL_WIFI " WiFi", wifiOpenCb, nullptr);
+  mkBtn(scrSettings, 240, 260, 110, 44, "Clock...", clockSetOpenCb, nullptr);
+  mkBtn(scrSettings, 360, 260, 100, 44, "Feel", feedbackOpenCb, nullptr);
 }
 
 static void buildWizard() {
@@ -1166,6 +1316,68 @@ static void buildFeedback() {
   mkBtn(scrFeedback, 20, 262, 160, 44, LV_SYMBOL_LEFT " Back", feedbackBackCb, nullptr);
 }
 
+static void buildWifi() {
+  scrWifi = lv_obj_create(nullptr);
+  lv_obj_set_style_bg_color(scrWifi, lv_color_hex(0x101418), 0);
+
+  lv_obj_t *t = lv_label_create(scrWifi);
+  lv_label_set_text(t, "Wi-Fi");
+  lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(t, lv_color_white(), 0);
+  lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 6);
+
+  lblWifiStatus = lv_label_create(scrWifi);
+  lv_obj_set_style_text_font(lblWifiStatus, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblWifiStatus, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_obj_set_width(lblWifiStatus, 440);
+  lv_label_set_long_mode(lblWifiStatus, LV_LABEL_LONG_DOT);
+  lv_obj_align(lblWifiStatus, LV_ALIGN_TOP_MID, 0, 46);
+  lv_label_set_text(lblWifiStatus, "Scanning...");
+
+  lstWifi = lv_list_create(scrWifi);
+  lv_obj_set_size(lstWifi, 440, 152);
+  lv_obj_align(lstWifi, LV_ALIGN_TOP_MID, 0, 78);
+  lv_obj_set_style_text_font(lstWifi, &lv_font_montserrat_20, 0);
+
+  mkBtn(scrWifi, 20, 262, 130, 44, LV_SYMBOL_REFRESH " Scan", wifiScanCb, nullptr);
+  mkBtn(scrWifi, 170, 262, 120, 44, "Forget", wifiForgetCb, nullptr);
+  mkBtn(scrWifi, 310, 262, 150, 44, LV_SYMBOL_LEFT " Back", wifiBackCb, nullptr);
+}
+
+static void buildWifiPass() {
+  scrWifiPass = lv_obj_create(nullptr);
+  lv_obj_set_style_bg_color(scrWifiPass, lv_color_hex(0x101418), 0);
+
+  lv_obj_t *t = lv_label_create(scrWifiPass);
+  lv_label_set_text(t, "Password");
+  lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(t, lv_color_white(), 0);
+  lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 6);
+
+  lblWifiSsid = lv_label_create(scrWifiPass);
+  lv_obj_set_style_text_font(lblWifiSsid, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblWifiSsid, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_obj_set_width(lblWifiSsid, 440);
+  lv_label_set_long_mode(lblWifiSsid, LV_LABEL_LONG_DOT);
+  lv_obj_align(lblWifiSsid, LV_ALIGN_TOP_MID, 0, 44);
+  lv_label_set_text(lblWifiSsid, "");
+
+  taWifiPass = lv_textarea_create(scrWifiPass);
+  lv_obj_set_size(taWifiPass, 440, 44);
+  lv_obj_align(taWifiPass, LV_ALIGN_TOP_MID, 0, 74);
+  lv_textarea_set_one_line(taWifiPass, true);
+  lv_textarea_set_password_mode(taWifiPass, true);
+  lv_textarea_set_max_length(taWifiPass, 63);
+  lv_obj_set_style_text_font(taWifiPass, &lv_font_montserrat_20, 0);
+
+  kbWifiPass = lv_keyboard_create(scrWifiPass);
+  lv_keyboard_set_textarea(kbWifiPass, taWifiPass);
+  lv_obj_align(kbWifiPass, LV_ALIGN_TOP_MID, 0, 128);
+
+  mkBtn(scrWifiPass, 170, 276, 140, 36, "CONNECT", wifiPassConnectCb, nullptr);
+  mkBtn(scrWifiPass, 410, 276, 60, 36, "X", wifiPassCancelCb, nullptr);
+}
+
 // ================= публичное API =================
 
 void uiBegin() {
@@ -1224,6 +1436,8 @@ void uiBegin() {
   buildWizard();
   buildClockSet();
   buildFeedback();
+  buildWifi();
+  buildWifiPass();
   Serial0.println("UI: init done");
 
   // Без калибровки сразу открываем визард
@@ -1331,6 +1545,7 @@ void uiTask() {
   static int lastMin = -1;
   if (millis() - lastClockRead > 500) {
     lastClockRead = millis();
+    wifiUiPoll();   // обновление экрана Wi-Fi (скан/статус подключения)
     DateTime t;
     if (clockPresent() && clockGet(t) && !clockOscStopped()) {
       if (t.min != lastMin) {

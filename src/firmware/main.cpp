@@ -31,6 +31,7 @@
 #include "storage.h"
 #include "ui.h"
 #include "clock.h"
+#include "wifi.h"
 
 Motor motor;
 
@@ -243,6 +244,7 @@ void setup() {
 
   uiBegin();
   clockBegin();   // DS3231: после uiBegin (Wire уже поднят на GPIO8/9)
+  wifiBegin();    // фоновый WiFi: авто-подключение сохранённой сети + NTP
 
 
   // Диагностика PSRAM (важно для LVGL)

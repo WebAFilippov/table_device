@@ -71,6 +71,23 @@ void stPutB(const char* key, bool v) {
   unlock();
 }
 
+String stGetS(const char* key, const char* def) {
+  lock();
+  prefs.begin("table", true);
+  String v = prefs.getString(key, def);
+  prefs.end();
+  unlock();
+  return v;
+}
+
+void stPutS(const char* key, const String &v) {
+  lock();
+  prefs.begin("table", false);
+  prefs.putString(key, v);
+  prefs.end();
+  unlock();
+}
+
 void stClear() {
   lock();
   prefs.begin("table", false);
