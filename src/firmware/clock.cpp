@@ -79,7 +79,7 @@ bool clockOscStopped() {
 }
 
 int clockTzMin() {
-  return (int)stGetF("tzMin", 420.0f);   // +7 часов по умолчанию (Красноярск)
+  return (int)stGetF("tzMin", 0.0f);
 }
 
 const char *clockWdayName(int y, int m, int d) {

@@ -39,6 +39,14 @@ static lv_obj_t *ddTz = nullptr;
 // --- часы (DS3231) ---
 static lv_obj_t *lblClock = nullptr;
 
+// --- вибромотор ---
+static bool vibEnabled = true;
+static bool vibOn = false;
+static int vibTaps = 0;            // сколько ещё включений после текущего
+static uint32_t vibPhaseEnd = 0;   // конец текущей фазы
+static uint32_t vibOnMs = 120, vibOffMs = 100;
+static lv_obj_t *vibSwitch = nullptr;
+
 // --- экран установки даты/времени ---
 static lv_obj_t *scrClockSet = nullptr;
 static lv_obj_t *lblClkSub = nullptr;
@@ -83,6 +91,7 @@ static void brightnessCb(lv_event_t *e);
 static void sleepCb(lv_event_t *e);
 static void manualSpeedCb(lv_event_t *e);
 static void timezoneCb(lv_event_t *e);
+static void vibCb(lv_event_t *e);
 static void wizPrimaryCb(lv_event_t *e);
 static void wizCancelCb(lv_event_t *e);
 static void wizKeyCb(lv_event_t *e);
@@ -163,6 +172,47 @@ static void setBrightness(uint8_t pct) {
 static void setSleepMin(uint8_t m) {
   sleepMin = m;
   stPutF("sleepMin", (float)m);
+}
+
+// ================= вибромотор =================
+
+static void vibPulse(uint32_t ms) {
+  if (!vibEnabled) return;
+  digitalWrite(Pin::VIB, HIGH);
+  vibOn = true;
+  vibTaps = 0;
+  vibPhaseEnd = millis() + ms;
+}
+
+static void vibPattern(int taps, uint32_t onMs, uint32_t offMs) {
+  if (!vibEnabled || taps < 1) return;
+  vibOnMs = onMs;
+  vibOffMs = offMs;
+  vibPulse(onMs);
+  vibTaps = taps - 1;
+}
+
+// Неблокирующий «проигрыватель» паттернов: зовётся из uiTask
+static void vibTask() {
+  if (!vibOn && vibTaps == 0) return;
+  uint32_t now = millis();
+  if (vibOn && now >= vibPhaseEnd) {
+    digitalWrite(Pin::VIB, LOW);
+    vibOn = false;
+    vibPhaseEnd = (vibTaps > 0) ? (now + vibOffMs) : 0;
+  } else if (!vibOn && vibTaps > 0 && now >= vibPhaseEnd) {
+    digitalWrite(Pin::VIB, HIGH);
+    vibOn = true;
+    vibPhaseEnd = now + vibOnMs;
+    vibTaps--;
+  }
+}
+
+static void vibCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+  vibEnabled = lv_obj_has_state(vibSwitch, LV_STATE_CHECKED);
+  stPutF("vibEn", vibEnabled ? 1.0f : 0.0f);
+  if (vibEnabled) vibPulse(80);   // подтверждение, что включили
 }
 
 // ================= уведомления =================
@@ -343,6 +393,7 @@ static void presetCb(lv_event_t *e) {
       char b[64];
       snprintf(b, sizeof(b), "Saved P%d: %.1f cm", n, motor.posMm() / 10.0f);
       uiNotice(b, 2500);
+      vibPulse(120);
     }
   } else if (code == LV_EVENT_CLICKED) {
     float mm = stGetF(("p" + String(n)).c_str(), NAN);
@@ -422,6 +473,7 @@ static void wizPrimaryCb(lv_event_t *e) {
     case WIZ_CONFIRM:
       // умная калибровка: подтверждаем вычисленные значения
       motor.setHeightsMm(wizHmin, wizHmin + wizTravel);
+      vibPattern(2, 120, 120);
       wizShow(WIZ_DONE);
       break;
 
@@ -451,6 +503,7 @@ static void wizPrimaryCb(lv_event_t *e) {
       }
 
       motor.setHeightsMm(h1, h2);
+      vibPattern(2, 120, 120);
       wizShow(WIZ_DONE);
       break;
     }
@@ -793,11 +846,24 @@ static void buildSettings() {
   lv_dropdown_set_options(ddTz,
     "UTC+2\nUTC+3\nUTC+4\nUTC+5\nUTC+6\nUTC+7\nUTC+8\nUTC+9\nUTC+10\nUTC+11\nUTC+12");
   lv_obj_align(ddTz, LV_ALIGN_TOP_LEFT, 180, 220);
-  lv_obj_set_size(ddTz, 180, 45);
+  lv_obj_set_size(ddTz, 140, 45);
   lv_obj_set_style_text_font(ddTz, &lv_font_montserrat_20, 0);
   int tzIdx = constrain(clockTzMin() / 60 - 2, 0, 10);
   lv_dropdown_set_selected(ddTz, tzIdx);
   lv_obj_add_event_cb(ddTz, timezoneCb, LV_EVENT_VALUE_CHANGED, nullptr);
+
+  // Вибрация вкл/выкл
+  lv_obj_t *lvb = lv_label_create(scrSettings);
+  lv_label_set_text(lvb, "Vib:");
+  lv_obj_set_style_text_font(lvb, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lvb, lv_color_white(), 0);
+  lv_obj_align(lvb, LV_ALIGN_TOP_LEFT, 330, 226);
+
+  vibSwitch = lv_switch_create(scrSettings);
+  lv_obj_align(vibSwitch, LV_ALIGN_TOP_LEFT, 380, 220);
+  lv_obj_set_size(vibSwitch, 60, 30);
+  if (vibEnabled) lv_obj_add_state(vibSwitch, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(vibSwitch, vibCb, LV_EVENT_VALUE_CHANGED, nullptr);
 
   // Назад + установка даты/времени
   mkBtn(scrSettings, 20, 260, 160, 44, LV_SYMBOL_LEFT " Back", settingsBackCb, nullptr);
@@ -896,6 +962,11 @@ void uiBegin() {
   brightPct = (uint8_t)stGetF("bright", 60.0f);
   sleepMin = (uint8_t)stGetF("sleepMin", 0.0f);
 
+  // Вибромотор
+  pinMode(Pin::VIB, OUTPUT);
+  digitalWrite(Pin::VIB, LOW);
+  vibEnabled = stGetF("vibEn", 1.0f) >= 0.5f;
+
   ledcAttach(Pin::LCD_BL, 5000, 8);
   ledcWrite(Pin::LCD_BL, (uint32_t)(brightPct * 255 / 100));
 
@@ -947,19 +1018,24 @@ void uiEvent(MotorEvent e) {
   switch (e) {
     case MotorEvent::OBSTACLE:
       uiNotice("Pinch! Backing off", 3000);
+      vibPattern(3, 100, 120);
       break;
     case MotorEvent::ENC_STALL:
       uiNotice("Encoder silent!", 5000);
+      vibPattern(3, 100, 120);
       break;
     case MotorEvent::CAL_HIT_MIN:
       if (wizActive) wizShow(WIZ_PAUSE);
       uiNotice("Bottom reached. Going up in 3 s...", 4000);
+      vibPulse(80);
       break;
     case MotorEvent::CAL_HIT_MAX:
       if (wizActive) wizShow(WIZ_VERIFY);
       uiNotice("Top reached. Checking...", 5000);
+      vibPulse(80);
       break;
     case MotorEvent::CAL_VERIFIED:
+      vibPulse(120);
       if (wizActive) {
         wizHmin = stGetF("hminDef", HMIN_DEFAULT_MM);
         int64_t range = motor.ticksMax() - motor.ticksMin();
@@ -976,15 +1052,19 @@ void uiEvent(MotorEvent e) {
     case MotorEvent::CAL_VERIFY_FAIL:
       if (wizActive) wizShow(WIZ_FAIL);
       uiNotice("Check failed! Encoder or mechanics", 6000);
+      vibPattern(3, 100, 120);
       break;
     case MotorEvent::CAL_TIMEOUT:
       uiNotice("Calibration failed", 5000);
+      vibPattern(3, 100, 120);
       break;
     case MotorEvent::END_LIMIT:
       uiNotice("End of travel", 2000);
+      vibPattern(2, 100, 120);
       break;
     case MotorEvent::REACHED_TARGET:
       uiNotice("Done", 1500);
+      vibPulse(150);
       break;
     default:
       break;
@@ -992,6 +1072,8 @@ void uiEvent(MotorEvent e) {
 }
 
 void uiTask() {
+  vibTask();   // проигрывание паттернов вибрации
+
   // ДИАГНОСТИКА: если обработчик LVGL тормозит >20 мс — печатаем максимум
   uint32_t t0 = millis();
   lv_timer_handler();

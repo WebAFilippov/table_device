@@ -11,6 +11,7 @@ namespace Pin {
   constexpr int LCD_BL  = 7;              // подсветка
   constexpr int CTP_SDA = 8, CTP_SCL = 9; // тач I2C
   constexpr int CTP_RST = 6;              // сброс тача
+  constexpr int VIB     = 18;             // вибромотор (модуль IN/VCC/GND, 5В)
 }
 
 // ================= ШИМ =================
