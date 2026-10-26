@@ -20,6 +20,9 @@ void Motor::begin() {
   }
   ledcWrite(Pin::RPWM, 0);
   ledcWrite(Pin::LPWM, 0);
+  // Диагностика свиста: реальная частота ШИМ (если ~9.8 кГц — это и есть писк)
+  Serial0.printf("PWM: запрошено %lu Гц, реально %lu Гц\n",
+                 (unsigned long)PWM_FREQ, (unsigned long)ledcReadFreq(Pin::RPWM));
 
   enc.attachFullQuad(Pin::ENC_A, Pin::ENC_B);
   enc.setCount(0);
