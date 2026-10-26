@@ -29,6 +29,11 @@ constexpr uint32_t PWM_MAX  = (1u << PWM_BITS) - 1;   // 2047
 // Зуммер: LEDC, 10 бит; громкость — заполнением (слайдер в настройках)
 constexpr int      SND_BITS = 10;
 
+// ================= OTA (GitHub Releases) =================
+constexpr uint16_t FW_VERSION = 100;            // версия прошивки: 100 = "1.0"
+constexpr char GITHUB_OWNER[] = "WebAFilippov"; // репозиторий с релизами
+constexpr char GITHUB_REPO[]  = "table_device";
+
 // ================= Кинематика =================
 // Измерено: 1500 тиков = 152 мм (повторяемо)
 constexpr float MM_PER_TICK_DEFAULT = 152.0f / 1500.0f;   // ~0.1013

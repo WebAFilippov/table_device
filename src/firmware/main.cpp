@@ -32,6 +32,8 @@
 #include "ui.h"
 #include "clock.h"
 #include "wifi.h"
+#include "ota.h"
+#include <esp_ota_ops.h>
 
 Motor motor;
 
@@ -106,7 +108,7 @@ static void handleLine(String s) {
   if (cmd == "help") {
     Serial0.println("help | status | up | down | stop | go <мм> | cal | setH <Hмин> <Hмакс>");
     Serial0.println("save <1..4> | goP <1..4> | setOc <ампер> | setV <мм/с 10..25> | resetcal");
-    Serial0.println("time | setTime ЧЧ:ММ[:СС] [ДД.ММ.ГГГГ] | setTz <+7>");
+    Serial0.println("time | setTime ЧЧ:ММ[:СС] [ДД.ММ.ГГГГ] | setTz <+7> | wifi | ota");
   } else if (cmd == "status" || cmd == "pos") {
     printStatus();
     Serial0.printf("калибровка: %s | ticks[min=%lld, max=%lld] | mm/тик=%.5f\n",
@@ -197,6 +199,17 @@ static void handleLine(String s) {
     } else {
       Serial0.println("Формат: setTz <+7> (или минуты, напр. 420)");
     }
+  } else if (cmd == "wifi") {
+    if (wifiIsConnected()) {
+      Serial0.printf("WiFi: %s, IP %s, RSSI %d dBm\n",
+                     wifiCurrentSsid().c_str(), wifiIp().c_str(), (int)wifiRssi());
+    } else {
+      Serial0.printf("WiFi: не подключено (сохранено: %s)\n",
+                     wifiSavedSsid().length() ? wifiSavedSsid().c_str() : "нет");
+    }
+  } else if (cmd == "ota") {
+    Serial0.printf("Прошивка: v%s. Проверяю обновления на GitHub...\n", fwVersionStr(fwVersion()));
+    otaCheck();
   } else if (cmd == "save") {
     int n = arg.toInt();
     if (n >= 1 && n <= 4 && motor.calibrated()) {
@@ -245,6 +258,7 @@ void setup() {
   uiBegin();
   clockBegin();   // DS3231: после uiBegin (Wire уже поднят на GPIO8/9)
   wifiBegin();    // фоновый WiFi: авто-подключение сохранённой сети + NTP
+  otaBegin();     // фоновое OTA: авто-проверка обновлений через 30 с
 
 
   // Диагностика PSRAM (важно для LVGL)
@@ -259,6 +273,15 @@ void setup() {
 }
 
 void loop() {
+  // Подтверждение работоспособности прошивки через 30 с после старта:
+  // если это была OTA-установка и она не дожила — загрузчик откатится сам
+  static bool rollbackOk = false;
+  if (!rollbackOk && millis() > 30000) {
+    rollbackOk = true;
+    esp_ota_mark_app_valid_cancel_rollback();
+    Serial0.println("OTA: прошивка подтверждена (откат отменён)");
+  }
+
   MotorEvent e = motor.pollEvent();
   if (e != MotorEvent::NONE) {
     printEvent(e);

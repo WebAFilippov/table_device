@@ -3,6 +3,7 @@
 #include "storage.h"
 #include "clock.h"
 #include "wifi.h"
+#include "ota.h"
 #include <TFT_eSPI.h>
 #include <Wire.h>
 #include <esp32-hal-psram.h>
@@ -79,6 +80,14 @@ static int uiNetCount = 0;
 static char uiSelSsid[33] = "";
 static bool scanWaiting = false;
 
+// --- экран Update (OTA) ---
+static lv_obj_t *scrUpdate = nullptr;
+static lv_obj_t *lblUpdCur = nullptr;
+static lv_obj_t *lblUpdAvail = nullptr;
+static lv_obj_t *lblUpdStatus = nullptr;
+static lv_obj_t *barUpd = nullptr;
+static uint32_t otaRebootAt = 0;
+
 // --- экран установки даты/времени ---
 static lv_obj_t *scrClockSet = nullptr;
 static lv_obj_t *lblClkSub = nullptr;
@@ -138,6 +147,10 @@ static void wifiForgetCb(lv_event_t *e);
 static void wifiItemCb(lv_event_t *e);
 static void wifiPassConnectCb(lv_event_t *e);
 static void wifiPassCancelCb(lv_event_t *e);
+static void updateOpenCb(lv_event_t *e);
+static void updateCheckCb(lv_event_t *e);
+static void updateInstallCb(lv_event_t *e);
+static void updateBackCb(lv_event_t *e);
 static void wizPrimaryCb(lv_event_t *e);
 static void wizCancelCb(lv_event_t *e);
 static void wizKeyCb(lv_event_t *e);
@@ -498,6 +511,105 @@ static void wifiPassConnectCb(lv_event_t *e) {
 
 static void wifiPassCancelCb(lv_event_t *e) {
   if (lv_event_get_code(e) == LV_EVENT_CLICKED) lv_scr_load(scrWifi);
+}
+
+// ================= Update (OTA) =================
+
+static void updateUiState(OtaState st) {
+  char b[64];
+  snprintf(b, sizeof(b), "Current: v%s", fwVersionStr(fwVersion()));
+  lv_label_set_text(lblUpdCur, b);
+
+  switch (st) {
+    case OtaState::CHECKING:
+      lv_label_set_text(lblUpdStatus, "Checking...");
+      break;
+    case OtaState::NO_UPDATE:
+      lv_label_set_text(lblUpdStatus, "Up to date");
+      break;
+    case OtaState::UPDATE_AVAILABLE:
+      snprintf(b, sizeof(b), "Available: v%s", fwVersionStr(otaAvailVersion()));
+      lv_label_set_text(lblUpdAvail, b);
+      lv_label_set_text(lblUpdStatus, "Update available");
+      if (lv_scr_act() != scrUpdate) {
+        char n[48];
+        snprintf(n, sizeof(n), "Update v%s available!", fwVersionStr(otaAvailVersion()));
+        uiNotice(n, 8000);
+        sndPlay(M_SAVED, 1);
+      }
+      break;
+    case OtaState::NO_WIFI:
+      lv_label_set_text(lblUpdStatus, "No WiFi connection");
+      break;
+    case OtaState::DOWNLOADING:
+      lv_label_set_text(lblUpdStatus, "Downloading...");
+      break;
+    case OtaState::INSTALLING:
+      lv_label_set_text(lblUpdStatus, "Installing...");
+      break;
+    case OtaState::DONE:
+      lv_label_set_text(lblUpdStatus, "Done! Rebooting...");
+      vibPattern(2, 120, 120);
+      sndPlay(M_CALDONE, 3);
+      otaRebootAt = millis() + 2500;
+      break;
+    case OtaState::ERROR:
+      lv_label_set_text(lblUpdStatus, "Update failed");
+      break;
+    default:
+      break;
+  }
+
+  if (st == OtaState::DOWNLOADING || st == OtaState::INSTALLING) {
+    lv_obj_clear_flag(barUpd, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(barUpd, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+// Зовётся из uiTask каждые 500 мс
+static void otaUiPoll() {
+  static OtaState lastSt = OtaState::IDLE;
+  OtaState st = otaState();
+  if (st != lastSt) {
+    lastSt = st;
+    updateUiState(st);
+  }
+  if (st == OtaState::DOWNLOADING || st == OtaState::INSTALLING) {
+    lv_bar_set_value(barUpd, otaProgress(), LV_ANIM_OFF);
+  }
+  // перезагрузка после успешной установки
+  if (otaRebootAt != 0 && millis() >= otaRebootAt) {
+    otaRebootAt = 0;
+    ESP.restart();
+  }
+}
+
+static void updateOpenCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_label_set_text(lblUpdAvail, "Available: --");
+  updateUiState(otaState());
+  lv_scr_load(scrUpdate);
+  otaCheck();   // сразу проверяем
+}
+
+static void updateCheckCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  otaCheck();
+}
+
+static void updateInstallCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (otaState() == OtaState::UPDATE_AVAILABLE) {
+    otaInstall();
+  } else {
+    uiNotice("Nothing to install", 2000);
+  }
+}
+
+static void updateBackCb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_scr_load(scrWifi);
 }
 
 // ================= уведомления =================
@@ -1347,9 +1459,52 @@ static void buildWifi() {
   lv_obj_align(lstWifi, LV_ALIGN_TOP_MID, 0, 78);
   lv_obj_set_style_text_font(lstWifi, &lv_font_montserrat_20, 0);
 
-  mkBtn(scrWifi, 20, 262, 130, 44, LV_SYMBOL_REFRESH " Scan", wifiScanCb, nullptr);
-  mkBtn(scrWifi, 170, 262, 120, 44, "Forget", wifiForgetCb, nullptr);
-  mkBtn(scrWifi, 310, 262, 150, 44, LV_SYMBOL_LEFT " Back", wifiBackCb, nullptr);
+  mkBtn(scrWifi, 20, 262, 105, 44, LV_SYMBOL_REFRESH " Scan", wifiScanCb, nullptr);
+  mkBtn(scrWifi, 135, 262, 105, 44, "Forget", wifiForgetCb, nullptr);
+  mkBtn(scrWifi, 250, 262, 100, 44, "Update", updateOpenCb, nullptr);
+  mkBtn(scrWifi, 360, 262, 100, 44, LV_SYMBOL_LEFT " Back", wifiBackCb, nullptr);
+}
+
+static void buildUpdate() {
+  scrUpdate = lv_obj_create(nullptr);
+  lv_obj_set_style_bg_color(scrUpdate, lv_color_hex(0x101418), 0);
+
+  lv_obj_t *t = lv_label_create(scrUpdate);
+  lv_label_set_text(t, "Update");
+  lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(t, lv_color_white(), 0);
+  lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 6);
+
+  lblUpdCur = lv_label_create(scrUpdate);
+  lv_obj_set_style_text_font(lblUpdCur, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblUpdCur, lv_color_white(), 0);
+  lv_obj_align(lblUpdCur, LV_ALIGN_TOP_LEFT, 20, 56);
+  lv_label_set_text(lblUpdCur, "Current: --");
+
+  lblUpdAvail = lv_label_create(scrUpdate);
+  lv_obj_set_style_text_font(lblUpdAvail, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblUpdAvail, lv_color_white(), 0);
+  lv_obj_align(lblUpdAvail, LV_ALIGN_TOP_LEFT, 20, 86);
+  lv_label_set_text(lblUpdAvail, "Available: --");
+
+  lblUpdStatus = lv_label_create(scrUpdate);
+  lv_obj_set_style_text_font(lblUpdStatus, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblUpdStatus, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_obj_set_width(lblUpdStatus, 440);
+  lv_label_set_long_mode(lblUpdStatus, LV_LABEL_LONG_DOT);
+  lv_obj_align(lblUpdStatus, LV_ALIGN_TOP_LEFT, 20, 116);
+  lv_label_set_text(lblUpdStatus, "Ready");
+
+  barUpd = lv_bar_create(scrUpdate);
+  lv_obj_set_size(barUpd, 440, 20);
+  lv_obj_align(barUpd, LV_ALIGN_TOP_MID, 0, 150);
+  lv_bar_set_range(barUpd, 0, 100);
+  lv_bar_set_value(barUpd, 0, LV_ANIM_OFF);
+  lv_obj_add_flag(barUpd, LV_OBJ_FLAG_HIDDEN);
+
+  mkBtn(scrUpdate, 20, 262, 130, 44, "Check", updateCheckCb, nullptr);
+  mkBtn(scrUpdate, 170, 262, 150, 44, "Install", updateInstallCb, nullptr);
+  mkBtn(scrUpdate, 340, 262, 120, 44, LV_SYMBOL_LEFT " Back", updateBackCb, nullptr);
 }
 
 static void buildWifiPass() {
@@ -1446,6 +1601,7 @@ void uiBegin() {
   buildFeedback();
   buildWifi();
   buildWifiPass();
+  buildUpdate();
   Serial0.println("UI: init done");
 
   // Без калибровки сразу открываем визард
@@ -1556,6 +1712,7 @@ void uiTask() {
   if (millis() - lastClockRead > 500) {
     lastClockRead = millis();
     wifiUiPoll();   // обновление экрана Wi-Fi (скан/статус подключения)
+    otaUiPoll();    // обновление экрана Update + авто-перезагрузка после OTA
     DateTime t;
     bool conn = wifiIsConnected();
     if (clockPresent() && clockGet(t) && !clockOscStopped()) {
