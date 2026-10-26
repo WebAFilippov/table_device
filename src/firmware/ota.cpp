@@ -47,8 +47,9 @@ bool parseRelease(const String &json, uint16_t &ver, char *url, size_t urlSize) 
 }
 
 bool doCheck(uint16_t &ver, char *url, size_t urlSize) {
+  Serial0.printf("OTA: проверяю %s\n", apiUrl());
   WiFiClientSecure client;
-  client.setInsecure();   // пропускаем проверку сертификата (для простоты)
+  client.setInsecure();
   HTTPClient http;
   http.setTimeout(15000);
   http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
@@ -57,38 +58,66 @@ bool doCheck(uint16_t &ver, char *url, size_t urlSize) {
   if (code == HTTP_CODE_OK) {
     String body = http.getString();
     http.end();
-    return parseRelease(body, ver, url, urlSize);
+    bool ok = parseRelease(body, ver, url, urlSize);
+    if (ok) {
+      Serial0.printf("OTA: релиз v%d.%d, ассет: %s\n", (int)(ver / 100), (int)(ver % 100), url);
+    } else {
+      Serial0.println("OTA: не удалось разобрать JSON релиза");
+    }
+    return ok;
   }
   http.end();
+  Serial0.printf("OTA: проверка не удалась, HTTP %d\n", code);
   return false;
 }
 
 bool doInstall(const char *url) {
+  Serial0.printf("OTA: качаю %s\n", url);
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  http.setTimeout(20000);
+  http.setTimeout(60000);
   // GitHub отдаёт ассет 302-редиректом на objects.githubusercontent.com —
   // без этого HTTPClient вернёт 302 и установка упадёт с "Update failed"
   http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   http.begin(client, url);
   int code = http.GET();
-  if (code != HTTP_CODE_OK) { http.end(); return false; }
   int len = http.getSize();
-  if (len <= 0 || !Update.begin((size_t)len)) { http.end(); return false; }
+  Serial0.printf("OTA: HTTP %d, размер %d байт\n", code, len);
+  if (code != HTTP_CODE_OK) { http.end(); return false; }
+  if (len <= 0) { http.end(); Serial0.println("OTA: размер неизвестен"); return false; }
+  if (!Update.begin((size_t)len)) {
+    Serial0.printf("OTA: Update.begin не удался: %s\n", Update.errorString());
+    http.end();
+    return false;
+  }
 
   gProgress = 0;
   WiFiClient *stream = http.getStreamPtr();
   uint8_t buf[2048];   // 2 КБ на стеке — TLS ест много стека, не больше
   int read = 0, total = 0;
+  int lastPct = -1;
   while ((read = stream->read(buf, sizeof(buf))) > 0) {
     Update.write(buf, (size_t)read);
     total += read;
     gProgress = (int)((long)total * 100 / len);
+    if (gProgress / 10 != lastPct / 10) {
+      lastPct = gProgress;
+      Serial0.printf("OTA: %d%% (%d из %d)\n", gProgress, total, len);
+    }
   }
   http.end();
-  if (total != len) { Update.abort(); return false; }
-  return Update.end();   // при успехе новый раздел станет загрузочным
+  if (total != len) {
+    Update.abort();
+    Serial0.printf("OTA: загрузка оборвалась: %d из %d байт\n", total, len);
+    return false;
+  }
+  if (!Update.end()) {
+    Serial0.printf("OTA: Update.end не удался: %s\n", Update.errorString());
+    return false;
+  }
+  Serial0.println("OTA: записано успешно");
+  return true;
 }
 
 void otaTaskFn(void *) {
@@ -119,6 +148,7 @@ void otaTaskFn(void *) {
       gState = OtaState::DOWNLOADING;
       bool ok = (WiFi.status() == WL_CONNECTED) && doInstall(dlUrl);
       gState = ok ? OtaState::DONE : OtaState::ERROR;
+      if (!ok) Serial0.println("OTA: установка не удалась (детали выше)");
     }
 
     // авто-проверка раз в сутки (первая — через ~30 с после старта)

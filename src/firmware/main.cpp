@@ -108,7 +108,7 @@ static void handleLine(String s) {
   if (cmd == "help") {
     Serial0.println("help | status | up | down | stop | go <мм> | cal | setH <Hмин> <Hмакс>");
     Serial0.println("save <1..4> | goP <1..4> | setOc <ампер> | setV <мм/с 10..25> | resetcal");
-    Serial0.println("time | setTime ЧЧ:ММ[:СС] [ДД.ММ.ГГГГ] | setTz <+7> | wifi | ota");
+    Serial0.println("time | setTime ЧЧ:ММ[:СС] [ДД.ММ.ГГГГ] | setTz <+7> | wifi | ota | otaf");
   } else if (cmd == "status" || cmd == "pos") {
     printStatus();
     Serial0.printf("калибровка: %s | ticks[min=%lld, max=%lld] | mm/тик=%.5f\n",
@@ -210,6 +210,11 @@ static void handleLine(String s) {
   } else if (cmd == "ota") {
     Serial0.printf("Прошивка: v%s. Проверяю обновления на GitHub...\n", fwVersionStr(fwVersion()));
     otaCheck();
+  } else if (cmd == "otaf") {
+    // принудительная установка последнего релиза (для отладки/переустановки)
+    Serial0.println("OTA: принудительная установка последнего релиза...");
+    otaCheck();
+    otaInstall();
   } else if (cmd == "save") {
     int n = arg.toInt();
     if (n >= 1 && n <= 4 && motor.calibrated()) {
